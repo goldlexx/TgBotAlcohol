@@ -32,4 +32,5 @@ export function message(chat, screen) {
 }
 
 export const allowed = (env, id) => typeof env.ALLOWED_CHAT_IDS === 'string' &&
-  env.ALLOWED_CHAT_IDS.split(',').some(value => value.trim() === String(id));
+  (env.CLOSED_TEST === '1' ? env.ALLOWED_CHAT_IDS.trim() === String(id)
+    : env.ALLOWED_CHAT_IDS.split(',').some(value => value.trim() === String(id)));

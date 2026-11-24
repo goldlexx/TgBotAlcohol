@@ -98,6 +98,21 @@ test('Worker health, secret, allowlist, private chat and stale callback', async 
   assert.match(await session(100).receive({ callback: 'old-token:save' }), /устарела/);
 });
 
+test('Закрытый Worker скрывает health и допускает ровно один тестовый чат', async () => {
+  const hidden = { ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: '107' };
+  const check = secret => worker.fetch(new Request('https://local/health', {
+    headers: { 'X-Telegram-Bot-Api-Secret-Token': secret }
+  }), hidden);
+  assert.equal((await check('invalid')).status, 404);
+  assert.equal((await check(secret)).status, 200);
+  const api = async () => {};
+  assert.equal((await webhook(request(108, '/start'), hidden, now, api)).status, 204);
+  assert.equal((await webhook(request(107, '/start'), { ...hidden, ALLOWED_CHAT_IDS: '107,108' }, now, api)).status, 204);
+  assert.equal(await get('SELECT id FROM users WHERE id IN (107,108)'), null);
+  await webhook(request(107, '/start'), hidden, now, api);
+  assert.equal((await get('SELECT id FROM users WHERE id=107')).id, 107);
+});
+
 test('P0 помощь до регистрации, симптомы и сомнения, дальнейший нейтральный маршрут', async () => {
   for (const [id, label] of [[101, 'Есть симптомы'], [102, 'Не уверен(а)']]) {
     const s = session(id);

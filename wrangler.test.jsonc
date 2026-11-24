@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tgbot-alcohol",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-11-23",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": false
+  },
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tgbot-alcohol-test",
+      "database_id": "77117cee-5d49-4549-8862-bc9a47e955f1"
+    }
+  ],
+  "account_id": "e9648642771612b9c00aaa73c74f3020",
+  "vars": {
+    "CLOSED_TEST": "1"
+  }
+}

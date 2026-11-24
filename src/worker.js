@@ -104,7 +104,12 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
 export default {
   async fetch(request, env) {
     const { pathname } = new URL(request.url);
-    if (pathname === '/health' && request.method === 'GET') return Response.json({ ok: true });
+    if (pathname === '/health' && request.method === 'GET') {
+      if (env.CLOSED_TEST === '1' && !await authenticated(request, env.WEBHOOK_SECRET)) {
+        return new Response(null, { status: 404 });
+      }
+      return Response.json({ ok: true });
+    }
     if (pathname === '/telegram/webhook' && request.method === 'POST') {
       try { return await webhook(request, env); } catch { return new Response(null, { status: 503 }); }
     }
