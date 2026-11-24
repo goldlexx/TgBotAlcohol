@@ -112,7 +112,7 @@ test('Неизвестное время: следующая полночь, те
 });
 
 test('Каталоги: уникальные идентификаторы, источники, медицинская редакция ожидается', () => {
-  assert.equal(new Set(ideas.map(i => i.text)).size, 32);
+  assert.equal(new Set(ideas.map(i => i.text)).size, 120);
   assert.equal(new Set(facts.map(f => f.id)).size, facts.length);
   assert.ok(facts.every(f => sources[f.source_id] && f.population && f.limitations && f.clinical_status === 'pending'));
 });

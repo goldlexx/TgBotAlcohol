@@ -74,7 +74,7 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
     const state = await load(env.DB, input.id, input.updateId, subject);
     if (state.duplicate) return empty();
     response = dialog(state, input, now);
-    if (!state.deleted && state.profile && !state.writes.some(([sql]) => sql.startsWith('DELETE FROM achievements'))) {
+    if (!response.readOnly && !state.deleted && state.profile && !state.writes.some(([sql]) => sql.startsWith('DELETE FROM achievements'))) {
       saveAwards(state, input.id, achievements(state.intervals, now));
     }
     try {
@@ -88,11 +88,9 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
   if (response) {
     const ack = input.callbackId ? api(env, 'answerCallbackQuery', { callback_query_id: input.callbackId }).catch(() => {}) : null;
     try {
-      if (response.keyboard) await api(env, 'sendMessage', {
-        chat_id: input.id, text: 'Выбери раздел в меню.',
-        reply_markup: { keyboard: sections.map(row => row.map(([text]) => ({ text }))), resize_keyboard: true, is_persistent: true }
-      });
-      await api(env, 'sendMessage', message(input.id, response));
+      const keyboard = response.keyboard && { keyboard: sections.map(row => row.map(([text]) => ({ text }))), resize_keyboard: true, is_persistent: true };
+      await api(env, 'sendMessage', message(input.id, { ...response, keyboard }));
+      if (response.followup) await api(env, 'sendMessage', message(input.id, response.followup));
     } catch {
       // The update is committed. Replaying it could duplicate a message whose delivery is unknown.
     }

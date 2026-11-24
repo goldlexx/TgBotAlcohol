@@ -34,10 +34,41 @@ export function parseDate(value, zone, now, precision) {
 }
 
 export const validClock = value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
-export const displayTime = (ms, zone) => local(ms, zone).toPlainDateTime().toString({ smallestUnit: 'minute' }).replace('T', ' ');
+export const displayDay = iso => iso.split('-').reverse().join('.');
+export const displayTime = (ms, zone) => displayDay(today(ms, zone)) + ', ' + local(ms, zone).toPlainTime().toString({ smallestUnit: 'minute' });
 export const observation = (date, zone) => date.precision === 'day'
-  ? (date.day ?? localDay(date.ms - 1, zone).toString()) + ' (время неизвестно)'
+  ? displayDay(date.day ?? today(date.ms - 1, zone)) + ' (время неизвестно)'
   : displayTime(date.ms, zone);
+
+export const popularZones = [
+  ['Москва', 'Europe/Moscow'], ['Калининград', 'Europe/Kaliningrad'], ['Екатеринбург', 'Asia/Yekaterinburg'],
+  ['Новосибирск', 'Asia/Novosibirsk'], ['Владивосток', 'Asia/Vladivostok']
+];
+const otherZones = [
+  ['Санкт-Петербург', 'Europe/Moscow'], ['Минск', 'Europe/Minsk'], ['Алматы', 'Asia/Almaty'], ['Тбилиси', 'Asia/Tbilisi'],
+  ['Ереван', 'Asia/Yerevan'], ['Баку', 'Asia/Baku'], ['Ташкент', 'Asia/Tashkent'], ['Киев', 'Europe/Kyiv'],
+  ['Лондон', 'Europe/London'], ['Берлин', 'Europe/Berlin'], ['Париж', 'Europe/Paris'], ['Нью-Йорк', 'America/New_York'],
+  ['Стамбул', 'Europe/Istanbul'], ['Дубай', 'Asia/Dubai'], ['Токио', 'Asia/Tokyo'], ['Самара', 'Europe/Samara']
+];
+export function cityZone(value) {
+  const city = [...popularZones, ...otherZones].find(([name]) => name.toLocaleLowerCase('ru') === value.toLocaleLowerCase('ru'));
+  if (city) return zoneName(city[1]);
+  if (/^[a-z _-]+$/i.test(value) && value.toUpperCase() !== 'UTC') {
+    const wanted = value.replaceAll(' ', '_').toLowerCase();
+    const match = Intl.supportedValuesOf('timeZone').find(zone => zone.split('/').at(-1).toLowerCase() === wanted);
+    if (match) return match;
+  }
+  return zoneName(value.toUpperCase() === 'UTC' ? 'UTC' : value);
+}
+export const zoneOffset = (zone, now) => 'UTC' + local(now, zone).offset.replace(/:00$/, '').replace(/^(\W)0(?=\d)/, '$1');
+export function zoneLabel(zone, now) {
+  if (zone === 'UTC') return 'Всемирное время (UTC)';
+  const city = [...popularZones, ...otherZones].find(([, key]) => zone === key);
+  if (city) return city[0];
+  return new Intl.DateTimeFormat('ru', { timeZone: zone, timeZoneName: 'longGeneric' }).formatToParts(now)
+    .find(part => part.type === 'timeZoneName')?.value ?? zoneOffset(zone, now);
+}
+export const dateInput = raw => raw.replace(/^(\d\d)\.(\d\d)\.(\d{4})\b/, '$3-$2-$1');
 
 export function completeDates(start, end, zone, excludeStart = false) {
   let first = localDay(start, zone);

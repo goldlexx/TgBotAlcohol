@@ -23,8 +23,9 @@ async function deliver(env, job, now, api) {
   const period = today(now, p.zone);
   const next = slotFor(state, p.frequency === 'milestones' ? Math.max(now, job.slot) : now, period);
   const previous = await first(db, `SELECT *, (SELECT max(milestone) FROM delivery_receipts
-    WHERE user_id=? AND series=? AND status!='retry') AS highest
-    FROM (SELECT 1) LEFT JOIN delivery_receipts ON user_id=? AND local_day=?`, id, seriesId, id, localDate);
+    WHERE user_id=? AND series=? AND status!='retry') AS highest,
+    EXISTS(SELECT 1 FROM delivery_receipts WHERE user_id=? AND series=? AND status IN ('sent','reserved','unknown')) AS previous_report
+    FROM (SELECT 1) LEFT JOIN delivery_receipts ON user_id=? AND local_day=?`, id, seriesId, id, seriesId, id, localDate);
   const fresh = now - job.slot <= FRESH && localDate === period;
   const available = !previous.status || previous.status === 'retry';
   const latest = reached(now - series.start).at(-1);
@@ -50,7 +51,7 @@ async function deliver(env, job, now, api) {
     throw error;
   }
   if (!ready) return;
-  const outgoing = message(id, report(state, now, id, milestone, localDate));
+  const outgoing = message(id, report(state, now, id, milestone, localDate, seriesId !== 0 && !previous.previous_report));
   if (!await first(db, 'SELECT 1 FROM users WHERE id=? AND delivery_epoch=? AND generation=?', id, epoch, generation)) return;
   let status = 'sent', retry = null;
   try {

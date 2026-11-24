@@ -22,11 +22,15 @@ export async function telegram(env, method, body) {
   }
 }
 
+export const renderHtml = text => text.replace(/[&<>]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[char])
+  .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>');
+
 export function message(chat, screen) {
   const rows = screen.buttons.filter(row => row.length);
   return {
-    chat_id: chat, text: screen.text, link_preview_options: { is_disabled: true },
-    ...(screen.removeKeyboard ? { reply_markup: { remove_keyboard: true } }
+    chat_id: chat, text: renderHtml(screen.text), parse_mode: 'HTML', link_preview_options: { is_disabled: true },
+    ...(screen.keyboard ? { reply_markup: screen.keyboard }
+      : screen.removeKeyboard ? { reply_markup: { remove_keyboard: true } }
       : rows.length ? { reply_markup: { inline_keyboard: rows } } : {})
   };
 }

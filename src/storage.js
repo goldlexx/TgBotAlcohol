@@ -7,7 +7,7 @@ export async function load(db, id, updateId = -1, subject = '') {
     stmt(db, 'SELECT * FROM episodes WHERE user_id=? ORDER BY start,id', id),
     stmt(db, 'SELECT * FROM abstinence_intervals WHERE user_id=? ORDER BY start', id),
     stmt(db, 'SELECT * FROM habit_versions WHERE user_id=? ORDER BY effective', id),
-    stmt(db, 'SELECT * FROM habit_items WHERE user_id=? ORDER BY effective,line', id),
+    stmt(db, 'SELECT item.*,name.drink FROM habit_items item LEFT JOIN habit_drinks name USING(user_id,effective,line) WHERE item.user_id=? ORDER BY effective,line', id),
     stmt(db, 'SELECT 1 FROM update_dedup WHERE user_id=? AND update_id=?', id, updateId),
     stmt(db, 'SELECT 1 FROM deletion_markers WHERE subject=? AND update_id>=?', subject, updateId)
   ])).map(row => row.results);
@@ -68,6 +68,7 @@ export function saveHabit(state, id, habit, effective) {
   state.writes.push(['INSERT INTO habit_versions VALUES (?,?,?,?,?,?)', id, effective, habit.mode, habit.period, habit.currency, habit.budget]);
   for (const [line, row] of habit.items.entries()) {
     state.writes.push(['INSERT INTO habit_items VALUES (?,?,?,?,?,?,?,?)', id, effective, line, row.weekday, row.portions, row.ml, row.abv, row.price]);
+    if (row.drink) state.writes.push(['INSERT INTO habit_drinks VALUES (?,?,?,?)', id, effective, line, row.drink]);
   }
   state.habits.push({ ...habit, effective });
 }

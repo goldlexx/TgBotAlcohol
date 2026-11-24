@@ -6,7 +6,8 @@ export function currencyCode(value) {
   return code;
 }
 
-function decimal(value, min, max) {
+export function decimal(value, min, max) {
+  value = value.replace(/\s/g, '');
   if (!/^\d{1,9}(?:[.,]\d{1,4})?$/.test(value)) throw new Error('number');
   const n = new Decimal(value.replace(',', '.'));
   if (n.lt(min) || n.gt(max)) throw new Error('range');
@@ -17,7 +18,7 @@ export function digits(currency) {
   return new Intl.NumberFormat('ru', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits;
 }
 
-function minor(value, currency) {
+export function minor(value, currency) {
   const amount = decimal(value, 0, 100_000_000).times(10 ** digits(currency));
   if (!amount.isInteger()) throw new Error('minor units');
   return amount.toNumber();
@@ -50,7 +51,19 @@ export function parseHabit(text, mode) {
   return { mode, period, currency, budget, items };
 }
 
-export const presets = [
-  ['Пиво · 500 мл, 5%', '500 5'], ['Вино · 150 мл, 12%', '150 12'],
-  ['Крепкий напиток · 50 мл, 40%', '50 40']
-];
+export const drinks = {
+  beer: ['Пиво', [500, 1000, 1500, 2000], [4, 4.5, 5, 5.5, 6]],
+  wine: ['Вино', [150, 300, 500, 750], [10, 11, 12, 13, 14]],
+  sparkling: ['Игристое вино', [150, 300, 500, 750], [8, 10, 11, 12, 13]],
+  vodka: ['Водка', [50, 100, 200, 250], [37.5, 40, 45, 50]],
+  whisky: ['Виски', [50, 100, 200, 250], [40, 43, 46, 50]],
+  brandy: ['Коньяк', [50, 100, 200, 250], [38, 40, 42, 45]],
+  cocktail: ['Коктейли', [150, 200, 250, 330], [4, 6, 8, 10, 15]],
+  other: ['Другое', [100, 150, 250, 500], [5, 10, 15, 20, 40]]
+};
+export const drinkName = key => Object.hasOwn(drinks, key) ? drinks[key][0] : key === 'budget' ? 'Расходы' : 'Напиток';
+export const volume = ml => ml === null ? 'объём не указан'
+  : ml >= 1000 ? new Intl.NumberFormat('ru').format(ml / 1000) + ' л' : ml + ' мл';
+export const formatMoney = (amount, currency, rounded = false) => new Intl.NumberFormat('ru', {
+  style: 'currency', currency, ...(rounded ? { maximumFractionDigits: 0 } : {})
+}).format(Number(amount) / 10 ** digits(currency));
