@@ -1,0 +1,12 @@
+node_modules/
+.wrangler/
+.codex-token-guard/
+.dev.vars*
+.env*
+!.env.example
+*.db*
+*.sqlite*
+*.dump
+*.log
+backups/
+wrangler.test.local.jsonc

@@ -1,0 +1,17 @@
+{
+  "name": "tgbot-alcohol",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "dev": "wrangler dev --local --test-scheduled"
+  },
+  "dependencies": {
+    "@js-temporal/polyfill": "0.5.1",
+    "decimal.js": "10.6.0"
+  },
+  "devDependencies": {
+    "miniflare": "5.20261116.0-beta",
+    "wrangler": "4.163.0"
+  }
+}
