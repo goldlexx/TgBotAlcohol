@@ -3,6 +3,7 @@ import { reached } from './calculations.js';
 import { slotFor } from './schedule.js';
 import { report } from './views.js';
 import { DAY, today } from './time.js';
+import { medicalHold } from './safety.js';
 import { allowed, message, telegram, TelegramError } from './telegram.js';
 
 export const BATCH = 8;
@@ -17,7 +18,7 @@ async function deliver(env, job, now, api) {
   const state = await load(db, id);
   const p = state.profile;
   const series = state.intervals.at(-1);
-  if (!p || p.trackingPaused || p.frequency === 'off' || series?.end !== null) return;
+  if (!p || medicalHold(p) || p.frequency === 'off' || series?.end !== null) return;
   const seriesId = state.episodes.at(-1)?.id ?? 0;
   const localDate = today(job.slot, p.zone);
   const period = today(now, p.zone);

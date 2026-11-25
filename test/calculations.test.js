@@ -116,3 +116,41 @@ test('Каталоги: уникальные идентификаторы, ис�
   assert.equal(new Set(facts.map(f => f.id)).size, facts.length);
   assert.ok(facts.every(f => sources[f.source_id] && f.population && f.limitations && f.clinical_status === 'pending'));
 });
+
+test('Невыпитые порции разделены по напитку и объёму в обоих режимах', () => {
+  const items = [
+    { drink: 'beer', ml: 500, portions: 2, weekday: 6, abv: null, price: null },
+    { drink: 'beer', ml: 1000, portions: 1, weekday: 6, abv: 5, price: null },
+    { drink: 'wine', ml: 150, portions: 3, weekday: 7, abv: 12, price: null },
+    { drink: 'vodka', ml: null, portions: 5, weekday: 4, abv: 40, price: null },
+    { drink: 'budget', ml: null, portions: 1, weekday: 4, abv: null, price: 200 }
+  ];
+  const end = date('2025-01-05T00:00Z');
+  const counts = mode => {
+    const stats = calculate([range(epoch)], [{ effective: epoch, mode, items, period: 7, budget: null, currency: 'RUB' }], 'UTC', end);
+    assert.equal(stats.partialDrinks, true);
+    return [...stats.drinks].map(([key, amount]) => [JSON.parse(key), Number(amount)]);
+  };
+  assert.deepEqual(counts('average'), [[['beer', 500], 8 / 7], [['beer', 1000], 4 / 7], [['wine', 150], 12 / 7]]);
+  assert.deepEqual(counts('calendar'), [[['beer', 500], 2], [['beer', 1000], 1], [['wine', 150], 0]]);
+});
+
+test('Полные выходные учитывают пояс, DST, границы и разрыв серии', () => {
+  const zone = 'America/New_York', before = date('2025-03-10T03:59:59Z'), monday = date('2025-03-10T04:00Z');
+  const base = { ms: date('2025-03-08T04:00Z'), precision: 'minute' };
+  const all = timeline(base, []);
+  assert.equal(calculate(all, [], 'UTC', before, zone).weekends, 0);
+  const completed = calculate(all, [], 'UTC', monday, zone);
+  assert.equal(completed.days, 2);
+  assert.equal(completed.weekends, 1);
+  const open = { start: date('2025-03-15T19:00Z'), last: null, precision: null };
+  const later = date('2025-03-24T04:00Z');
+  const paused = calculate(timeline(base, [open]), [], 'UTC', later, zone);
+  assert.equal(paused.days, 7);
+  assert.equal(paused.weekends, 1);
+  assert.equal(paused.current, 0);
+  const resumed = calculate(timeline(base, [{ ...open, last: date('2025-03-17T04:00Z'), precision: 'day' }]), [], 'UTC', later, zone);
+  assert.equal(resumed.days, 14);
+  assert.equal(resumed.weekends, 2);
+  assert.equal(resumed.current, 7 * DAY);
+});

@@ -184,6 +184,38 @@ test('Регистрация, /start без сброса, контент, цел
   assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=104'), null);
 });
 
+test('Медицинские экраны сохраняют профиль и доставку, старый флаг ограничивает только рассылку', async () => {
+  const id = 113;
+  await seed([id], { trackingPaused: true, goal: 14 });
+  await statement('UPDATE users SET neutral=1 WHERE id=?', id).run();
+  const s = session(id);
+  const before = await load(db, id);
+  const job = await get('SELECT * FROM delivery_jobs WHERE user_id=?', id);
+  for (let i = 0; i < 2; i++) {
+    assert.match(await s.nav('physical'), /медицинская оценка сегодня/);
+    assert.match(await s.press('Куда обратиться'), /врачом-наркологом/);
+    assert.match(await s.press('🚑 Экстренная помощь'), /112 или 103.*местному экстренному номеру/);
+    assert.match(await s.press('Главное меню'), /Счастье без алкоголя/);
+  }
+  assert.match(await s.receive('/start'), /9 дней 0 часов без алкоголя|9 дней без алкоголя/);
+  assert.match(await s.nav('progress'), /Достижения.*3 из 12/);
+  assert.match(await s.press('📊 Подробная статистика'), /Самая длинная серия/);
+  assert.match(await s.nav('history'), /Начало отслеживания/);
+  assert.match(await s.nav('settings'), /Последнее употребление/);
+  assert.match(await s.nav('awards'), /3 из 12/);
+  assert.match(await s.nav('craving'), /Резкое прекращение/);
+  assert.doesNotMatch(await s.receive('/morning'), /Факт о здоровье|Идея дня/);
+  const after = await load(db, id);
+  assert.deepEqual(after.profile, before.profile);
+  assert.deepEqual(after.intervals, before.intervals);
+  assert.equal(after.neutral, true);
+  assert.deepEqual(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), job);
+  let sent = 0;
+  await tick({ ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id) }, now, async () => sent++);
+  assert.equal(sent, 0);
+  await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
+});
+
 test('Эпизод: пауза, повторная проверка безопасности, новая серия, коррекция и удаление', async () => {
   const s = session(105);
   await onboard(s, { habit: true });
@@ -299,7 +331,11 @@ test('Пошаговая статистика: пресеты, ручной вв
   assert.deepEqual(first.habits[0].items.map(row => [row.drink,row.portions,row.ml,row.abv,row.price]), [
     ['beer',12,1000,5,50000], ['brandy',2,150,null,2000]
   ]);
-  assert.match(await s.nav('progress'), /частично/);
+  const progress = await s.nav('progress');
+  assert.match(progress, /порци[яий]+ пива<\/b> по 1\s000 мл/);
+  assert.match(progress, /коньяка<\/b> по 150 мл/);
+  assert.doesNotMatch(progress, /этанол|ккал|бутылок/);
+  assert.match(await s.press('📊 Подробная статистика'), /Чистый этанол:.*частично/);
   await s.nav('edit.habit');
   await s.press('✏️ Изменить сохранённое');
   await s.press('✏️ 2. Коньяк');
@@ -369,6 +405,37 @@ test('/morning использует общий генератор и не мен
   assert.equal(await s.receive('/morning'), 'Твой отчёт готов');
   await s.nav('notifications');
   await s.press('Отключить уведомления');
+});
+
+test('Показатели сохраняются и применяются в прогрессе, деталях и /morning', async () => {
+  const id = 114, s = session(id);
+  await onboard(s, { habit: true });
+  const profile = (await load(db, id)).profile;
+  await statement("INSERT INTO habit_items VALUES (?,?,0,NULL,7,500,5,NULL)", id, profile.base.ms).run();
+  await statement("INSERT INTO habit_drinks VALUES (?,?,0,'beer')", id, profile.base.ms).run();
+  const progress = await s.nav('progress');
+  assert.match(progress, /бутылок пива<\/b> по 500 мл/);
+  assert.match(progress, /Трезвых выходных.*1/);
+  assert.match(progress, /Всего трезвых дней/);
+  assert.doesNotMatch(progress, /этанол|ккал/);
+  assert.match(await s.nav('details'), /Дефицит калорий и снижение веса по ней не определяются/);
+  assert.doesNotMatch(await s.receive('/morning'), /этанол|ккал|Всего трезвых дней/);
+  await s.nav('settings');
+  await s.press('📊 Показатели прогресса');
+  await s.press('Экономия · вкл.');
+  await s.press('Невыпитые напитки · вкл.');
+  await s.press('Общие трезвые дни · вкл.');
+  await s.press('Трезвые выходные · вкл.');
+  await s.press('Чистый этанол · подробно');
+  await s.press('Калории · подробно');
+  assert.doesNotMatch(await s.nav('progress'), /Сэкономлено|Не выпито|Трезвых выходных|Всего трезвых дней|ккал|этанол/);
+  assert.match(await s.receive('/morning'), /Калории из этанола/);
+  await s.nav('metrics');
+  await s.press('Калории · и в отчёте');
+  assert.doesNotMatch(await s.nav('details'), /ккал/);
+  assert.match(await s.receive('/morning'), /Чистый этанол/);
+  assert.doesNotMatch(await s.receive('/morning'), /ккал/);
+  assert.deepEqual((await load(db, id)).profile.base, profile.base);
 });
 
 async function seed(ids, options = {}) {

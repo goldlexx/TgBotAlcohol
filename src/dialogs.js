@@ -4,8 +4,8 @@ import { saveTimeline, saveAwards, saveHabit, reschedule } from './storage.js';
 import { achievements } from './calculations.js';
 import { habitDraft, habitPrompt, handleHabit } from './habit-dialog.js';
 import { slotFor } from './schedule.js';
-import { preview, symptoms, riskHistory, risk } from './safety.js';
-import { back, helpButtons, nav, screen, sections, view, welcome } from './views.js';
+import { medicalHold, preview, symptoms, riskHistory, risk } from './safety.js';
+import { back, helpButtons, metricOptions, nav, reportMetrics, screen, sections, view, welcome } from './views.js';
 
 export const keys = new Map(sections.flat().map(([text, route]) => [text, route]));
 export const defaults = { goal: null, frequency: 'off', weekdays: [1], clock: '08:00', content: 'both', privatePush: false };
@@ -31,10 +31,15 @@ function prompt(state, now, correction = '') {
   const prev = [b('Назад', 'back')];
   switch (f.step) {
     case 'check': return form('🛡 **Перед началом**\n\n' + symptoms + '\n\nПодробнее о данных в /privacy.',
-      [b('Есть симптомы', 'urgent'), b('Симптомов сейчас нет', 'next')], [b('Не знаю', 'urgent')], [helpButtons[1]]);
-    case 'background': return form('🛡 **Важный вопрос**\n\n' + riskHistory, [b('Да / Не знаю', 'risk'), b('Нет', 'next')], helpButtons);
-    case 'paused': return form('⚕️ **Медицинская помощь**\n\n' + risk + '\n\nПосле обращения за профессиональной помощью можешь выбрать нейтральное отслеживание уже происходящего воздержания.',
-      [helpButtons[1]], [b('Есть профессиональная помощь · нейтральный режим', 'neutral')]);
+      [b('Есть симптомы', 'urgent')], [b('Симптомов сейчас нет', 'next')], [b('Не знаю', 'urgent')], [helpButtons[1]]);
+    case 'background': return form('🛡 **Важный вопрос**\n\n' + riskHistory, [b('Да / Не знаю', 'risk'), b('Нет', 'next')], ...helpButtons.map(b => [b]));
+    case 'paused': return form('⚕️ **Медицинская помощь**\n\n' + risk + (f.flow === 'new'
+      ? '\n\nПосле обращения за профессиональной помощью можешь выбрать нейтральное отслеживание уже происходящего воздержания.' : ''),
+      [helpButtons[1]], [nav('Куда обратиться', 'care')],
+      f.flow === 'new' ? [b('Есть профессиональная помощь · нейтральный режим', 'neutral')]
+        : f.flow === 'complete' ? [b('Продолжить запись эпизода', 'record')]
+          : [b('Настроить нейтральные отчёты', 'neutral')],
+      [nav('Главное меню', 'menu')]);
     case 'zone': {
       const cities = popularZones.map(([name, zone]) => b(name + ' (' + zoneOffset(zone, now) + ')', zone));
       return form('🌍 **Твой часовой пояс**\n\nВыбери город или часовой пояс, чтобы даты и уведомления отображались правильно.',
@@ -47,7 +52,7 @@ function prompt(state, now, correction = '') {
       : '📅 **Начало новой жизни**\n\nКогда был последний эпизод употребления алкоголя?') +
       '\n\n' + zoneLabel(f.zone, now) + ' (' + zoneOffset(f.zone, now) + ').',
       [b('Сейчас', 'now'), b('Сегодня', 'today'), b('Вчера', 'yesterday')],
-      [b('Указать дату и время', 'minute'), b('Помню только дату', 'day')],
+      [b('Указать дату и время', 'minute')], [b('Помню только дату', 'day')],
       f.step === 'episodeStart' && f.last ? [b('Одиночный эпизод', 'single')] : [],
       f.flow === 'new' ? prev : []);
     case 'dateInput': return form('📅 **Укажи дату**\n\nНапример: 14.11.2026.' +
@@ -59,9 +64,9 @@ function prompt(state, now, correction = '') {
     case 'goal': return form('🎯 **Моя цель**\n\nПосле достижения цели счётчик продолжит работать.',
       [b('7 дней', '7'), b('30 дней', '30'), b('90 дней', '90')], [b('Без конечной цели', 'none')]);
     case 'notify': return form('🔔 **Утренний отчёт**\n\nВыбери удобную частоту и время.',
-      [b('Каждый день в 08:00', 'daily8'), b('Другая частота или время', 'custom')], [b('Выключить', 'off')]);
+      [b('Каждый день в 08:00', 'daily8')], [b('Другая частота или время', 'custom')], [b('Выключить', 'off')]);
     case 'frequency': return form('📆 **Дни уведомлений**\n\nКак часто присылать отчёт?',
-      [b('Каждый день', 'daily'), b('В выбранные дни недели', 'selected')],
+      [b('Каждый день', 'daily')], [b('В выбранные дни недели', 'selected')],
       !state.neutral ? [b('Только на рубежах', 'milestones')] : [], prev);
     case 'weekdays': return form('📆 **Выбери дни недели**',
       weekdays.slice(0, 4).map((d, i) => b((f.weekdays.includes(i + 1) ? '✓ ' : '') + d, String(i + 1))),
@@ -75,13 +80,13 @@ function prompt(state, now, correction = '') {
       (state.profile.frequency === 'off' ? '\n\n' + preview : ''),
       [b(state.profile.frequency === 'off' ? 'Включить отчёты' : 'Сохранить', 'save')], prev);
     case 'episode': return form('☀️ **Твой путь продолжается**\n\nОдин эпизод употребления не перечёркивает предыдущие успехи. История, трезвые дни и ранее полученные достижения сохраняются.',
-      [b('Употребление завершилось', 'complete'), b('Эпизод продолжается', 'active')],
-      [b('Указать другое время', 'complete')], helpButtons);
+      [b('Употребление завершилось', 'complete')], [b('Эпизод продолжается', 'active')],
+      [b('Указать другое время', 'complete')], ...helpButtons.map(b => [b]));
     case 'episodeConfirm': return form('📅 **Проверь запись**\n\nСохранить ' + (f.flow === 'correct' ? 'исправление истории' : 'эпизод употребления') + '?' +
       (f.start !== undefined ? '\nНачало · ' + observation({ ms: f.start, precision: 'instant' }, f.zone) : '') +
       (f.last ? '\nПоследнее употребление · ' + observation(f.last, f.zone) : '') +
       (f.base ? '\nНачальная дата · ' + observation(f.base, f.zone) : ''),
-      [b('Подтвердить', 'save'), b('Изменить', 'back')], helpButtons);
+      [b('Подтвердить', 'save'), b('Изменить', 'back')], ...helpButtons.map(b => [b]));
     case 'delete': return form('🔐 **Удалить данные?**\n\nСтатистика и настройки будут удалены из базы бота. История переписки останется до удаления в Telegram.',
       [b('Удалить данные', 'save')]);
     default: return screen('Открой нужный раздел, чтобы продолжить.', back());
@@ -144,7 +149,6 @@ function saveEpisode(state, id, now, f) {
   const episodes = episode ? [...state.episodes.filter(e => e.id !== episode.id), episode].sort((a, b) => a.start - b.start) : state.episodes;
   planTimeline(state, id, now, base, episodes);
   state.profile.base = base;
-  if (f.resumeTracking) state.profile.trackingPaused = false;
   state.episodes = episodes;
   if (episode) {
     if (old) state.writes.push(['UPDATE episodes SET start=?,last=?,precision=? WHERE id=? AND user_id=?',
@@ -156,14 +160,14 @@ function saveEpisode(state, id, now, f) {
   reschedule(state, id, slotFor(state, now));
   return episode?.last === null
     ? screen('☀️ **Твой путь продолжается**\n\nСерия и обычные уведомления на паузе.',
-      [nav('Употребление завершилось', 'episode.time'), nav('Помощь сейчас', 'help')], helpButtons, back('progress'))
+      [nav('Употребление завершилось', 'episode.time')], ...helpButtons.map(b => [b]), back('progress'))
     : view('progress', state, now, id);
 }
 
 function flagNeutral(state, id) {
   state.changed = true;
   state.neutral = true;
-  if (state.profile) Object.assign(state.profile, { trackingPaused: true, frequency: 'off', goal: null });
+  if (state.profile) state.profile.medicalHold = true;
   reschedule(state, id, null);
 }
 function episodeInput(state, action) {
@@ -188,17 +192,15 @@ function formAction(state, id, now, action, updateId) {
       break;
     case 'background':
       if (action === 'risk') { flagNeutral(state, id); return go('paused'); }
-      if (action === 'next') return state.neutral && state.profile?.trackingPaused ? go('paused')
-        : f.flow === 'new' ? go('zone') : go('episodeConfirm');
+      if (action === 'next') return f.flow === 'new' ? go('zone') : go('episodeConfirm');
       break;
     case 'paused':
+      if (action === 'record' && f.flow === 'complete') return go('episodeConfirm');
       if (action === 'neutral') {
-        if (state.profile) {
-          if (f.flow === 'complete') return go('episodeConfirm', { ...f, resumeTracking: true });
-          state.profile.trackingPaused = false;
-          return settingsSaved(state, id, now);
+        if (f.flow === 'new' && !state.profile) return go('zone', { flow: 'new' });
+        if (f.flow === 'medical' && state.profile && state.neutral) {
+          return go('notify', { ...defaults, ...state.profile, flow: 'edit', neutralOptIn: true });
         }
-        return go('zone', { flow: 'new' });
       }
       break;
     case 'zone':
@@ -275,7 +277,8 @@ function formAction(state, id, now, action, updateId) {
       break;
     case 'notifyConfirm':
       if (action === 'back') return go(f.quick ? 'notify' : 'clock');
-      if (action === 'save' && !state.profile.trackingPaused) {
+      if (action === 'save' && (!medicalHold(state.profile) || (state.neutral && f.neutralOptIn))) {
+        if (f.neutralOptIn) state.profile.medicalHold = false;
         for (const key of ['frequency', 'weekdays', 'clock']) state.profile[key] = f[key];
         return settingsSaved(state, id, now, 'notifications');
       }
@@ -346,9 +349,15 @@ function routeTo(state, id, now, route) {
       finish(state);
       return p ? { ...view('progress', state, now, id), keyboard: true } : welcome;
     case 'begin': return p ? view('progress', state, now, id) : start('check', { flow: 'new' });
-    case 'physical':
-      flagNeutral(state, id);
-      return start('paused', { flow: 'medical' });
+    case 'metric': {
+      if (!p || !Object.hasOwn(metricOptions, arg)) return view('metrics', state, now, id);
+      const value = p.metrics?.[arg];
+      p.metrics = { ...p.metrics, [arg]: reportMetrics.includes(arg)
+        ? value === undefined ? true : value ? false : undefined
+        : value === false };
+      state.changed = true;
+      return view('metrics', state, now, id);
+    }
     case 'delete': return start('delete', { flow: 'edit' });
     case 'off':
       if (!p || arg !== state.user.generation) return view('privacy', state, now, id);
@@ -380,7 +389,7 @@ function routeTo(state, id, now, route) {
     }
     case 'edit':
       if (!p) return welcome;
-      if (arg === 'notify' && p.trackingPaused) return start('paused', { flow: 'medical' });
+      if (arg === 'notify' && medicalHold(p) && state.neutral) return start('paused', { flow: 'medical' });
       if (['goal', 'content', 'push'].includes(arg) && state.neutral) return view('settings', state, now, id);
       if (arg === 'notify') return start('notify', { ...defaults, ...p, flow: 'edit' });
       if (['goal', 'zone', 'content', 'push'].includes(arg)) return start(arg, { flow: 'edit' });

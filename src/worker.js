@@ -67,7 +67,7 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
   if (!await authenticated(request, env.WEBHOOK_SECRET)) return new Response(null, { status: 403 });
   const input = extract(await parseUpdate(request));
   if (!input || !allowed(env, input.id) || !env.TELEGRAM_TOKEN) return empty();
-  if (!['n:physical', 'n:emergency', 'n:help'].includes(input.callback) && input.text !== '/help' && limited(input.id, now)) return empty();
+  if (!['n:physical', 'n:emergency', 'n:help', 'n:care'].includes(input.callback) && input.text !== '/help' && limited(input.id, now)) return empty();
   const subject = await subjectFor(input.id, env.WEBHOOK_SECRET);
   let response;
   for (let attempt = 0; attempt < 5; attempt++) {
