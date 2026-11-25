@@ -1,17 +1,18 @@
-import { cityZone, clockInput, dateInput, displayDay, localDay, midnight, observation, parseDate, popularZones, validClock, zoneLabel, zoneOffset } from './time.js';
+import { cityZone, clockInput, dateInput, displayDay, localDay, midnight, observation, parseDate, popularZones, validClock, validWeekdays, today, DAY, zoneLabel, zoneOffset } from './time.js';
 import { timeline } from './history.js';
 import { saveTimeline, saveAwards, saveHabit, reschedule } from './storage.js';
-import { achievements } from './calculations.js';
+import { achievements, MILESTONES } from './calculations.js';
+import { drinkName, drinks, volume } from './habits.js';
 import { habitDraft, habitPrompt, handleHabit } from './habit-dialog.js';
 import { slotFor } from './schedule.js';
 import { hasMedicalRisk, preview, symptoms, riskHistory, risk } from './safety.js';
-import { back, helpButtons, metricOptions, nav, reportMetrics, screen, sections, view, welcome } from './views.js';
+import { back, helpButtons, metricOptions, nav, reportMetrics, screen, sections, view, welcome, reportPause } from './views.js';
 
 export const keys = new Map(sections.flat().map(([text, route]) => [text, route]));
 export const defaults = { goal: null, frequency: 'off', weekdays: [1], clock: '08:00', content: 'both', privatePush: false };
 const weekdays = 'Пн Вт Ср Чт Пт Сб Вс'.split(' ');
 const contents = [['Факт о здоровье', 'fact'], ['Идея для жизни', 'idea'], ['Оба', 'both'], ['Только статистика', 'numbers']];
-const episodeModes = ['active', 'complete', 'correct'];
+const episodeModes = ['active', 'complete', 'correct', 'remove'];
 
 function enter(state, step, data = {}) {
   state.changed = true;
@@ -75,17 +76,28 @@ function prompt(state, now, correction = '') {
       ...contents.map(([title, key]) => [b(title, key)]));
     case 'push': return form('🔐 **Формат превью**\n\nНейтральное сообщение содержит только фразу «Твой отчёт готов».',
       [b('Обычный отчёт', 'normal')], [b('Нейтральное сообщение', 'private')]);
-    case 'notifyConfirm': return form('🔔 **Подтверди расписание**\n\nОтчёт запланирован на ' + f.clock + ' по местному времени.' +
-      (state.profile.frequency === 'off' ? '\n\n' + preview : ''),
-      [b(state.profile.frequency === 'off' ? 'Включить отчёты' : 'Сохранить', 'save')], prev);
+    case 'notifyConfirm': {
+      const paused = reportPause({ ...state, profile: { ...state.profile, frequency: f.frequency, weekdays: f.weekdays } });
+      return form('🔔 **Подтверди расписание**\n\nВыбранное время — ' + f.clock + ' по местному времени.' +
+        (paused ? '\n\n' + paused : state.profile.frequency === 'off' ? '\n\n' + preview : ''),
+        [b(!paused && state.profile.frequency === 'off' ? 'Включить отчёты' : 'Сохранить', 'save')], prev);
+    }
     case 'episode': return form('☀️ **Твой путь продолжается**\n\nОдин эпизод употребления не перечёркивает предыдущие успехи. История, трезвые дни и ранее полученные достижения сохраняются.',
-      [b('Употребление завершилось', 'complete')], [b('Эпизод продолжается', 'active')],
-      [b('Указать другое время', 'complete')], ...helpButtons.map(b => [b]));
+      [b('Употребление завершилось', 'complete')], [b('Эпизод продолжается', 'active')], ...helpButtons.map(b => [b]));
     case 'episodeConfirm': return form('📅 **Проверь запись**\n\nСохранить ' + (f.flow === 'correct' ? 'исправление истории' : 'эпизод употребления') + '?' +
       (f.start !== undefined ? '\nНачало · ' + observation({ ms: f.start, precision: 'instant' }, f.zone) : '') +
       (f.last ? '\nПоследнее употребление · ' + observation(f.last, f.zone) : '') +
-      (f.base ? '\nНачальная дата · ' + observation(f.base, f.zone) : ''),
-      [b('Подтвердить', 'save'), b('Изменить', 'back')], ...helpButtons.map(b => [b]));
+      (f.base ? '\nНачальная дата · ' + observation(f.base, f.zone) : '') +
+      (extendable(state, f.base) ? '\n\nМожно применить прежнюю привычку и к добавленным дням, если она действовала тогда.' : ''),
+      [b('Подтвердить', 'save'), b('Изменить', 'back')],
+      extendable(state, f.base) ? [b('Сохранить и применить привычку', 'extend')] : [], ...helpButtons.map(b => [b]));
+    case 'episodeRemove': return form('🗑 **Удалить этот эпизод?**\n\nНачало · ' +
+      observation({ ms: f.start, precision: 'instant' }, f.zone) + '\nОкончание · ' +
+      (f.last ? observation(f.last, f.zone) : 'эпизод продолжается') +
+      '\n\nСерии и достижения будут пересчитаны.', [b('Удалить эпизод', 'save')]);
+    case 'nameDrink': return form('🥤 **Уточнить напиток**\n\n' + observation({ ms: f.effective, precision: 'instant' }, state.profile.historyZone) +
+      ' · ' + volume(f.ml) + '\nИзменится только название выбранной записи.',
+      ...Object.keys(drinks).map(key => [b(drinkName(key), key)]));
     case 'delete': return form('🔐 **Удалить данные?**\n\nСтатистика и настройки будут удалены из базы бота. История переписки останется до удаления в Telegram.',
       [b('Удалить данные', 'save')]);
     default: return screen('Открой нужный раздел, чтобы продолжить.', back());
@@ -96,6 +108,9 @@ function planTimeline(state, id, now, base, episodes) {
   const intervals = timeline(base, episodes);
   saveTimeline(state, id, intervals);
   saveAwards(state, id, achievements(intervals, now), true);
+}
+function extendable(state, base) {
+  return base && base.ms < state.profile.base.ms && state.habits[0]?.effective === state.profile.base.ms;
 }
 function settingsSaved(state, id, now, route = 'settings') {
   finish(state);
@@ -143,14 +158,32 @@ function chooseZone(state, id, now, zone) {
 function saveEpisode(state, id, now, f) {
   const old = state.episodes.find(e => e.id === f.episodeId);
   const base = f.base ?? state.profile.base;
-  const episode = f.start === undefined ? null : {
+  if (f.remove && !old) return view('history', state, now, id);
+  const episode = f.remove || f.start === undefined ? null : {
     id: old?.id ?? f.newId, start: f.start, last: f.last?.ms ?? null, precision: f.last?.precision ?? null
   };
-  const episodes = episode ? [...state.episodes.filter(e => e.id !== episode.id), episode].sort((a, b) => a.start - b.start) : state.episodes;
+  const episodes = f.remove ? state.episodes.filter(e => e.id !== old.id)
+    : episode ? [...state.episodes.filter(e => e.id !== episode.id), episode].sort((a, b) => a.start - b.start) : state.episodes;
   planTimeline(state, id, now, base, episodes);
+  const previousStart = old ? old.last : state.profile.base.ms;
+  const newStart = old ? episode?.last : f.base?.ms;
+  if (previousStart !== null && Number.isFinite(newStart) && newStart > previousStart) {
+    const cutoffs = MILESTONES.map(days => today(newStart + days * DAY, state.profile.zone));
+    state.writes.push([`UPDATE delivery_receipts SET milestone=NULL WHERE user_id=? AND series=?
+      AND local_day < CASE milestone ${MILESTONES.map(days => 'WHEN ' + days + ' THEN ?').join(' ')} END`,
+    id, old?.id ?? 0, ...cutoffs]);
+  }
+  if (f.extend && extendable(state, base)) {
+    const [habit, ...rest] = state.habits;
+    state.writes.push(['DELETE FROM habit_versions WHERE user_id=? AND effective=?', id, habit.effective]);
+    state.habits = [];
+    saveHabit(state, id, habit, base.ms);
+    state.habits.push(...rest);
+  }
   state.profile.base = base;
   state.episodes = episodes;
-  if (episode) {
+  if (f.remove) state.writes.push(['DELETE FROM episodes WHERE user_id=? AND id=?', id, old.id]);
+  else if (episode) {
     if (old) state.writes.push(['UPDATE episodes SET start=?,last=?,precision=? WHERE id=? AND user_id=?',
       episode.start, episode.last, episode.precision, episode.id, id]);
     else state.writes.push(['INSERT INTO episodes(id,user_id,start,last,precision) VALUES (?,?,?,?,?)',
@@ -228,7 +261,7 @@ function formAction(state, id, now, action, updateId) {
       break;
     case 'dateAmbiguous':
       if (action === 'day') return finishKnownDay();
-      if (action === 'back') return go('dateTime');
+      if (action === 'back') return go(f.stepBeforeAmbiguous ?? 'dateTime');
       if (['1', '2'].includes(action)) return finishDate(state, id, now, parseDate(f.dateDay + ' ' + f.clockValue + ' ' + action, f.zone, now, 'minute'));
       break;
     case 'goal':
@@ -289,11 +322,24 @@ function formAction(state, id, now, action, updateId) {
       if (action === 'back') {
         const role = f.base ? 'base' : f.last ? 'last' : 'start';
         return go(role === 'start' ? 'episodeStart' : 'date', {
-          ...f, dateRole: role, ...(role === 'last' && f.flow === 'correct' ? { start: undefined, last: undefined } : {})
+          ...f, dateRole: role, ...(role === 'last' && (f.flow === 'correct' || !f.episodeId) ? { start: undefined, last: undefined } : {})
         });
       }
-      if (action === 'save') return saveEpisode(state, id, now, { ...f, newId: updateId });
+      if (action === 'save' || action === 'extend') return saveEpisode(state, id, now, { ...f, newId: updateId, extend: action === 'extend' });
       break;
+    case 'episodeRemove':
+      if (action === 'save') return saveEpisode(state, id, now, { ...f, remove: true });
+      break;
+    case 'nameDrink': {
+      const row = state.habits.find(habit => habit.effective === f.effective)?.items.find(item => item.line === f.line);
+      if (row && row.drink == null && Object.hasOwn(drinks, action)) {
+        state.writes.push(['INSERT INTO habit_drinks VALUES (?,?,?,?)', id, f.effective, f.line, action]);
+        row.drink = action;
+        finish(state);
+        return view('details', state, now, id);
+      }
+      break;
+    }
     case 'delete':
       if (action === 'save') {
         state.deleted = true;
@@ -310,23 +356,27 @@ function formText(state, id, now, value) {
     enter(state, step, { ...f, ...data });
     return prompt(state, now);
   };
+  const readTime = (dateDay, clockValue) => {
+    try { return finishDate(state, id, now, parseDate(dateDay + ' ' + clockValue, f.zone, now, 'minute')); }
+    catch (error) {
+      if (error.message !== 'ambiguous') throw error;
+      return go('dateAmbiguous', { dateDay, clockValue, stepBeforeAmbiguous: f.step });
+    }
+  };
   switch (f.step) {
     case 'zone': case 'zoneText': return go('zoneConfirm', { candidate: cityZone(value) });
     case 'dateInput': {
       const normalized = dateInput(value);
       if (f.precision === 'day') return finishDate(state, id, now, parseDate(normalized, f.zone, now, 'day'));
-      if (normalized.includes(' ')) return finishDate(state, id, now, parseDate(normalized, f.zone, now, 'minute'));
+      const [dateDay, ...clock] = normalized.split(' ');
+      if (clock.length) return readTime(dateDay, clock.join(' '));
       parseDate(normalized, f.zone, now, 'day');
       return go('dateTime', { dateDay: normalized, viaInput: true });
     }
     case 'dateTime': {
       const clock = clockInput(value);
       if (!validClock(clock)) throw new Error('clock');
-      try { return finishDate(state, id, now, parseDate(f.dateDay + ' ' + clock, f.zone, now, 'minute')); }
-      catch (error) {
-        if (error.message !== 'ambiguous') throw error;
-        return go('dateAmbiguous', { clockValue: clock });
-      }
+      return readTime(f.dateDay, clock);
     }
     case 'clock': {
       const clock = clockInput(value);
@@ -339,7 +389,7 @@ function formText(state, id, now, value) {
 
 function routeTo(state, id, now, route) {
   const p = state.profile;
-  const [page, arg] = route.split('.');
+  const [page, arg, other] = route.split('.');
   if (state.fsm.step && !['help', 'physical', 'emergency', 'care'].includes(page)) finish(state);
   const start = (step, data) => {
     enter(state, step, data);
@@ -366,7 +416,19 @@ function routeTo(state, id, now, route) {
       return settingsSaved(state, id, now, 'notifications');
     case 'episode':
       if (!p) return welcome;
-      return arg === 'time' ? start('date', episodeInput(state, 'complete')) : start('episode', { flow: 'complete' });
+      return arg === 'time' || state.episodes.at(-1)?.last === null
+        ? start('date', episodeInput(state, 'complete')) : start('episode', { flow: 'complete' });
+    case 'remove': {
+      const episode = p && state.episodes.find(row => String(row.id) === arg);
+      return episode ? start('episodeRemove', { flow: 'remove', episodeId: episode.id, zone: p.historyZone,
+        start: episode.start, last: episode.last === null ? null : { ms: episode.last, precision: episode.precision } })
+        : view('history', state, now, id);
+    }
+    case 'name': {
+      const item = p && state.habits.find(habit => String(habit.effective) === arg)?.items.find(row => String(row.line) === other);
+      if (item && item.drink == null) return start('nameDrink', { effective: Number(arg), line: item.line, ml: item.ml });
+      return view('drinkNames', state, now, id);
+    }
     case 'correct': {
       if (!p) return welcome;
       if (arg === 'base') return start('date', { flow: 'correct', zone: p.historyZone, dateRole: 'base' });
@@ -390,7 +452,7 @@ function routeTo(state, id, now, route) {
     }
     case 'edit':
       if (!p) return welcome;
-      if (arg === 'notify') return start('notify', { ...defaults, ...p, flow: 'edit' });
+      if (arg === 'notify') return start('notify', { ...defaults, ...p, weekdays: validWeekdays(p.weekdays) ? p.weekdays : [], flow: 'edit' });
       if (['goal', 'zone', 'content', 'push'].includes(arg)) return start(arg, { flow: 'edit' });
       if (['habit', 'budget', 'mode'].includes(arg)) return start(arg === 'mode' ? 'habit.mode' : 'habit.home', habitDraft(state.habits.at(-1)));
       break;

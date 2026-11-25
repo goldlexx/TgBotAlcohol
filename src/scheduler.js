@@ -1,8 +1,8 @@
-import { first, guard, load, stmt } from './storage.js';
-import { reached } from './calculations.js';
+import { first, guard, load, saveAwards, stmt } from './storage.js';
+import { achievements, reached } from './calculations.js';
 import { slotFor } from './schedule.js';
 import { report } from './views.js';
-import { DAY, today } from './time.js';
+import { DAY, today, hasReportDays } from './time.js';
 import { hasMedicalRisk } from './safety.js';
 import { allowed, message, telegram, TelegramError } from './telegram.js';
 
@@ -21,7 +21,7 @@ async function deliver(env, job, now, api) {
   const matchesUser = 'EXISTS(SELECT 1 FROM users WHERE id=? AND delivery_epoch=? AND generation=?)';
   if (!state.user) return; // Jobs have an ON DELETE CASCADE foreign key.
   const { delivery_epoch: epoch, generation } = state.user;
-  if (!p || hasMedicalRisk(state) || p.frequency === 'off' || series?.end !== null) {
+  if (!p || hasMedicalRisk(state) || p.frequency === 'off' || !hasReportDays(p) || series?.end !== null) {
     await stmt(db, 'DELETE FROM delivery_jobs WHERE user_id=? AND next_due_at=? AND slot=? AND ' + matchesUser,
       id, job.next_due_at, job.slot, id, epoch, generation).run();
     return;
@@ -50,6 +50,8 @@ async function deliver(env, job, now, api) {
   if (ready) batch.push(stmt(db, `INSERT INTO delivery_receipts VALUES (?,?, 'reserved', ?,?,?)
     ON CONFLICT(user_id,local_day) DO UPDATE SET status='reserved',attempts=excluded.attempts,
     series=excluded.series,milestone=excluded.milestone`, id, localDate, attempts, seriesId, milestone));
+  saveAwards(state, id, achievements(state.intervals, now));
+  for (const [sql, ...args] of state.writes) batch.push(stmt(db, sql, ...args));
   try {
     await db.batch(batch);
   } catch (error) {

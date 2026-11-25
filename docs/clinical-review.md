@@ -1,4 +1,4 @@
-# Медицинская проверка v2.2
+# Медицинская проверка v2.3
 
 Материалы ниже ожидают проверки специалистом. Факты с идентификаторами из `content/facts.js` сохраняют `clinical_status: pending`.
 
@@ -12,7 +12,30 @@
 | Давление, печень, обмен веществ и вес | `pressure`, `liver`, `metabolism`, `weight`. |
 | Физическая активность, сексуальное здоровье и внешность | `activity`, `sexual`, `appearance`. |
 | Память, внимание и долгосрочные риски | `memory`, `attention`, `mouth`, `esophagus`. |
-| Экран «Восстановление» и ротация утренних фактов | Заголовки периодов, связь выводов с изученными группами и ограничения всех 15 фактов. |
+| Экран «Восстановление» и ротация утренних фактов | Заголовки периодов, связь выводов с изученными группами и ограничения всех 45 фактов. |
+
+## Новые предварительные факты
+
+Идентификаторы соответствуют записям каталога. У каждой записи есть первоисточник, аудитория и ограничения. Ручной просмотр закрытого теста явно отмечает статус. Для включения в автоматические отчёты требуется утверждение специалиста.
+
+| Темы | Идентификаторы |
+| --- | --- |
+| Память, движения и нервы | `new-memory`, `coordination`, `nerve-damage` |
+| Сердце, сосуды и давление | `atrial-fibrillation`, `cardiomyopathy`, `stroke` |
+| Печень, поджелудочная и кишечник | `fatty-liver`, `cirrhosis`, `pancreatitis`, `gut-barrier`, `reflux` |
+| Иммунная защита, отравление и травмы | `respiratory-infections`, `delayed-overdose`, `gag-reflex`, `falls`, `drowning`, `hypothermia`, `traffic-injury` |
+| Лекарства, кровотечения и уровень сахара | `sedative-breathing`, `bleeding`, `glucose-medicines` |
+| Беременность | `prenatal-development`, `prematurity` |
+| Онкологические риски | `breast-risk`, `colorectal-risk`, `cancer-mechanism` |
+| Кости, мышцы, питание и обращение за помощью | `bone-health`, `nutrient-absorption`, `muscle-effects`, `help-access` |
+
+## Черновик карточки поддержки
+
+«Один эпизод не перечёркивает сделанное. Если тебе нужна поддержка, можно обсудить ситуацию с врачом. При физических симптомах открой раздел медицинской помощи.»
+
+Карточка пока не показывается. Со специалистом нужно согласовать формулировку, момент показа и ссылки. Число эпизодов само по себе не даёт клинической оценки.
+
+Справочники в разделе помощи проверены 25.11.2026. [МЧС России](https://mchs.gov.ru/deyatelnost/bezopasnost-grazhdan/kak-pravilno-vyzvat-skoruyu_5), [NHS](https://www.nhs.uk/nhs-services/find-alcohol-addiction-support-services/), [NIAAA](https://alcoholtreatment.niaaa.nih.gov/how-to-find-alcohol-treatment), [Анонимные алкоголики](https://www.aa.org/faq/how-can-i-find-meeting-information).
 
 Для экстренного текста сверены рекомендации о серьёзных симптомах отмены и опасных признаках алкогольного отравления. [NICE CG100](https://www.nice.org.uk/guidance/cg100/chapter/Recommendations), [NIAAA Alcohol Overdose](https://www.niaaa.nih.gov/publications/brochures-and-fact-sheets/understanding-dangers-alcohol-overdose).
 

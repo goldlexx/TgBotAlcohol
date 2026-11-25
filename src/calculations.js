@@ -37,7 +37,7 @@ function estimate(habit, start, end, zone) {
   const factor = dates ? 1 : new Decimal(end - start).div(habit.period * DAY);
   return {
     grams: grams?.times(factor), money: money?.times(factor), drinks, factor,
-    partialGrams: habit.items.some(row => row.ml === null || row.abv === null) || !habit.items.length,
+    partialGrams: habit.items.some(row => row.drink !== 'budget' && (row.ml === null || row.abv === null)),
     partialMoney: habit.budget === null && !calendarBudget && (!habit.items.length || habit.items.some(row => row.price === null))
   };
 }

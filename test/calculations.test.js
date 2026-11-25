@@ -112,7 +112,7 @@ test('Неизвестное время: следующая полночь, те
 });
 
 test('Каталоги: уникальные идентификаторы, источники, медицинская редакция ожидается', () => {
-  assert.equal(new Set(ideas.map(i => i.text)).size, 120);
+  assert.equal(new Set(ideas.map(i => i.text)).size, 200);
   assert.equal(new Set(facts.map(f => f.id)).size, facts.length);
   assert.ok(facts.every(f => sources[f.source_id] && f.population && f.limitations && f.clinical_status === 'pending'));
 });
@@ -185,10 +185,28 @@ test('Календарный бюджет старой версии имеет �
   const full = calculate([range(saturday)], [mixed], 'UTC', end);
   close(full.money.get('RUB'), 100_000);
   close(full.drinks.get('["beer",500]'), 1);
+  assert.equal(full.partialGrams, false);
+  close(full.calories, full.grams.times(7).toNumber());
   const next = { ...mixed, effective: saturday + DAY / 2, items: mixed.items.slice(1) };
   const between = calculate([range(saturday)], [mixed, next], 'UTC', end);
   assert.equal(between.money.size, 0);
   close(between.drinks.get('["beer",500]'), 0);
   assert.equal(between.days, 1);
   close(calculate([range(saturday)], [mixed, next], 'UTC', end + 7 * DAY).money.get('RUB'), 50_000);
+});
+
+test('Бюджет без напитков оставляет объём и этанол неизвестными, в смешанном среднем расчёте бюджет не влияет на полноту', () => {
+  const budget = { effective: epoch, mode: 'average', period: 7, currency: 'RUB', budget: 7000, items: [] };
+  const full = calculate([range(epoch)], [budget], 'UTC', epoch + DAY);
+  assert.equal(full.grams, null);
+  assert.equal(full.calories, undefined);
+  assert.equal(full.drinks.size, 0);
+  const rows = [
+    { drink: 'budget', weekday: null, portions: 1, ml: null, abv: null, price: null },
+    { drink: 'wine', weekday: null, portions: 7, ml: 150, abv: 12, price: null }
+  ];
+  const mixed = calculate([range(epoch)], [{ ...budget, items: rows }], 'UTC', epoch + DAY);
+  assert.equal(mixed.partialGrams, false);
+  assert.equal(mixed.partialDrinks, false);
+  close(mixed.money.get('RUB'), 1000);
 });

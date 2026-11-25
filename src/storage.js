@@ -11,7 +11,8 @@ export async function load(db, id, updateId = -1, subject = '') {
     stmt(db, 'SELECT * FROM habit_versions WHERE user_id=? ORDER BY effective', id),
     stmt(db, 'SELECT item.*,name.drink FROM habit_items item LEFT JOIN habit_drinks name USING(user_id,effective,line) WHERE item.user_id=? ORDER BY effective,line', id),
     stmt(db, 'SELECT 1 FROM update_dedup WHERE user_id=? AND update_id=?', id, updateId),
-    stmt(db, 'SELECT 1 FROM deletion_markers WHERE subject=? AND update_id>=?', subject, updateId)
+    stmt(db, 'SELECT 1 FROM deletion_markers WHERE subject=? AND update_id>=?', subject, updateId),
+    stmt(db, 'SELECT days FROM achievements WHERE user_id=?', id)
   ])).map(row => row.results);
   const [user] = rows[0];
   const items = Map.groupBy(rows[4], row => row.effective);
@@ -23,7 +24,7 @@ export async function load(db, id, updateId = -1, subject = '') {
   return {
     user, profile,
     fsm: user ? JSON.parse(user.fsm) : {}, neutral: Boolean(user?.neutral),
-    episodes: rows[1], intervals: rows[2],
+    episodes: rows[1], intervals: rows[2], awards: new Set(rows[7].map(row => row.days)),
     habits: rows[3].map(row => ({ ...row, items: items.get(row.effective) ?? [] })),
     duplicate: rows[5].length > 0 || (updateId >= 0 && rows[6].length > 0),
     writes: []
@@ -58,6 +59,7 @@ export async function save(db, id, state, updateId, subject, now) {
 
 export function saveTimeline(state, id, intervals) {
   state.intervals = intervals;
+  state.timelineChanged = true;
   state.writes.push(['DELETE FROM abstinence_intervals WHERE user_id=?', id]);
   for (const period of intervals) {
     state.writes.push(['INSERT INTO abstinence_intervals VALUES (?,?,?,?)', id, period.start, period.end, period.precision]);
@@ -65,8 +67,9 @@ export function saveTimeline(state, id, intervals) {
 }
 
 export function saveAwards(state, id, awards, reset = false) {
-  if (reset) state.writes.push(['DELETE FROM achievements WHERE user_id=?', id]);
-  for (const days of awards) {
+  if (reset) state.writes.push([`DELETE FROM achievements WHERE user_id=?
+    ${awards.length ? 'AND days NOT IN (' + awards.map(() => '?').join(',') + ')' : ''}`, id, ...awards]);
+  for (const days of awards.filter(day => !state.awards.has(day))) {
     state.writes.push(['INSERT INTO achievements(user_id,days) VALUES (?,?) ON CONFLICT DO NOTHING', id, days]);
   }
 }

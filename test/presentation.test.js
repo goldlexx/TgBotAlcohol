@@ -5,7 +5,7 @@ import { facts, healthRotation } from '../content/facts.js';
 import { awardCatalog } from '../content/achievements.js';
 import { DAY } from '../src/time.js';
 import { renderHtml } from '../src/telegram.js';
-import { bar, view } from '../src/views.js';
+import { bar, report, view } from '../src/views.js';
 
 const now = Date.parse('2026-03-10T08:00Z');
 const state = { profile: { zone: 'UTC', historyZone: 'UTC' }, neutral: false, episodes: [], habits: [],
@@ -31,7 +31,7 @@ test('Все подборки проходят полный цикл без см
     const expected = new Set(ideas.filter(row => row.category === group).map(row => row.text));
     let route = 'life.' + group;
     const seen = new Set();
-    assert.equal(expected.size, 15);
+    assert.equal(expected.size, 25);
     for (let i = 0; i < expected.size; i++) {
       const item = view(route, state, now, 1);
       const advice = item.text.split('\n\n').at(-1);
@@ -58,6 +58,7 @@ test('Все подборки проходят полный цикл без см
 test('Текст и клавиатуры отделяют медицинскую помощь от статистики и советов', () => {
   const recovery = view('recovery', state, now, 1).text;
   assert.match(recovery, /наблюдения в группах/);
+  assert.match(recovery, /😴 \*\*Сон\*\*[\s\S]+❤️ \*\*Давление\*\*[\s\S]+🧠 \*\*Память\*\*/);
   assert.doesNotMatch(recovery, /На этом этапе|Что может измениться дальше|180 дней/);
   const craving = view('craving', state, now, 1);
   assert.ok(craving.text.indexOf('физически плохо') < craving.text.indexOf('отложить решение'));
@@ -79,7 +80,7 @@ test('Нулевое календарное начисление и неизве
   assert.match(progress, /Менее одной порции\*\* по 1 л/);
   assert.doesNotMatch(progress, /≈0 порций|порции напитка/);
   assert.match(view('details', make('calendar', 7), short, 1).text, /пока не начислены/);
-  assert.match(view('details', make('calendar', 7), short, 1).text, /Уточни название/);
+  assert.ok(view('details', make('calendar', 7), short, 1).buttons.flat().some(button => button.text === 'Уточнить напиток'));
   assert.doesNotMatch(view('details', state, short, 1).text, /Невыпитые порции/);
   assert.match(view('progress', make('average', 7), now, 1).text, /≈9 порций\*\* по 1 л/);
 });
@@ -91,4 +92,38 @@ test('Ручной отчёт поздравляет в местную дату 
     intervals: [{ start, end: null, precision: 'minute' }] };
   assert.match(view('morning', sample, end + 60_000, 1).text, new RegExp(awardCatalog[30][2]));
   assert.doesNotMatch(view('morning', sample, end + DAY, 1).text, new RegExp(awardCatalog[30][2]));
+});
+
+test('Расширенная ротация проходит весь набор до повторов и отделяет непроверенные факты', () => {
+  assert.equal(facts.length, 45);
+  assert.equal(ideas.length, 200);
+  const sample = { ...state, closedTest: true, profile: { ...state.profile, content: 'both' } };
+  const reportDays = Array.from({ length: 365 }, (_, index) => {
+    const ms = now + index * DAY, day = new Date(ms).toISOString().slice(0, 10);
+    const rendered = report(sample, ms, 1, day).text;
+    assert.equal(report(sample, ms, 1, day).text, rendered);
+    assert.doesNotMatch(report(sample, ms, 1, day, { automatic: true }).text, /Предварительный материал/);
+    const [, fact, idea] = /Факт о здоровье\*\*\n\n([^\n]+)[\s\S]*Идея дня\*\*\n\n([^\n]+)/.exec(rendered);
+    return [fact, idea, rendered];
+  });
+  assert.ok(reportDays.some(row => row[2].includes('Предварительный материал')));
+  for (const horizon of [30, 90, 180, 365]) for (const [index, length] of [[0, 45], [1, 200]]) {
+    assert.equal(new Set(reportDays.slice(0, horizon).map(row => row[index])).size, Math.min(horizon, length));
+    assert.equal(new Set(reportDays.slice(0, length).map(row => row[index])).size, length);
+  }
+});
+
+test('Личная цель поздравляет в день достижения; нулевая и малая экономия различаются', () => {
+  const end = now, start = end - 7 * DAY;
+  const sample = { ...state, profile: { ...state.profile, goal: 7 },
+    intervals: [{ start, end: null, precision: 'minute' }] };
+  const text = view('morning', sample, end, 1).text;
+  assert.match(text, /Твоя личная цель достигнута/);
+  assert.doesNotMatch(view('morning', sample, end + DAY, 1).text, /Твоя личная цель достигнута/);
+  const get = budget => view('progress', {
+    ...sample, habits: [{ effective: start, mode: 'average', period: 7, currency: 'RUB', items: [], budget }]
+  }, end, 1).text;
+  assert.doesNotMatch(get(null), /Сэкономлено|По указанным расходам/);
+  assert.match(get(0), /По указанным расходам.*0\s₽/);
+  assert.match(get(5), /Сэкономлено.*меньше 1\s₽/);
 });

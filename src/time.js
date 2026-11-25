@@ -87,12 +87,17 @@ export function clockOn(day, zone, clock) {
 
 export function nextReport(now, profile, afterDay = null) {
   if (profile.frequency === 'off') return null;
+  const selected = ['weekly', 'selected'].includes(profile.frequency);
+  if (!hasReportDays(profile)) return null;
   let day = localDay(now, profile.zone);
   for (let i = 0; i < 8; i++, day = day.add({ days: 1 })) {
     if (afterDay && day.toString() <= afterDay) continue;
-    if (['weekly', 'selected'].includes(profile.frequency) && !profile.weekdays.includes(day.dayOfWeek)) continue;
+    if (selected && !profile.weekdays.includes(day.dayOfWeek)) continue;
     const slot = clockOn(day, profile.zone, profile.clock);
     if (slot > now && today(slot, profile.zone) === day.toString()) return slot;
   }
   return null;
 }
+export const validWeekdays = days => Array.isArray(days) && days.length > 0 &&
+  days.every(day => Number.isInteger(day) && day >= 1 && day <= 7);
+export const hasReportDays = profile => !['weekly', 'selected'].includes(profile.frequency) || validWeekdays(profile.weekdays);

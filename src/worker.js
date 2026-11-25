@@ -1,6 +1,6 @@
 import { dialog } from './dialogs.js';
-import { sections } from './views.js';
-import { load, save, saveAwards } from './storage.js';
+import { screen, sections } from './views.js';
+import { first, load, save, saveAwards } from './storage.js';
 import { achievements } from './calculations.js';
 import { allowed, message, telegram } from './telegram.js';
 import { tick } from './scheduler.js';
@@ -68,13 +68,38 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
   const input = extract(await parseUpdate(request));
   if (!input || !allowed(env, input.id) || !env.TELEGRAM_TOKEN) return empty();
   if (!['n:physical', 'n:emergency', 'n:help', 'n:care'].includes(input.callback) && input.text !== '/help' && limited(input.id, now)) return empty();
+  if (/^\/admin(?:@[A-Za-z0-9_]+)?$/.test(input.text ?? '')) {
+    const owner = env.OWNER_CHAT_ID ?? (env.CLOSED_TEST === '1' && env.OWNER_IS_CLOSED_CHAT === '1' ? env.ALLOWED_CHAT_IDS.trim() : null);
+    if (owner !== String(input.id)) return empty();
+    const counts = await first(env.DB, `WITH profiles AS (
+      SELECT id,profile,neutral,json_extract(profile,'$.frequency') AS frequency FROM users
+    ) SELECT count(*) AS total, count(profile) AS registered,
+      count(*) FILTER (WHERE frequency IN ('daily','selected','weekly','milestones')) AS subscribed,
+      count(*) FILTER (WHERE frequency IN ('daily','selected','weekly','milestones')
+        AND instr(',' || ? || ',', ',' || id || ',')>0
+        AND neutral=0 AND coalesce(json_extract(profile,'$.medicalHold'),json_extract(profile,'$.trackingPaused'),0)=0
+        AND EXISTS(SELECT 1 FROM abstinence_intervals WHERE user_id=profiles.id AND end IS NULL)
+        AND (frequency NOT IN ('weekly','selected') OR (
+          json_type(profile,'$.weekdays')='array' AND json_array_length(profile,'$.weekdays')>0
+          AND NOT EXISTS(SELECT 1 FROM json_each(profile,'$.weekdays') WHERE type!='integer' OR value NOT BETWEEN 1 AND 7)
+        ))) AS eligible FROM profiles`,
+    env.CLOSED_TEST === '1' ? env.ALLOWED_CHAT_IDS.trim() : env.ALLOWED_CHAT_IDS.split(',').map(value => value.trim()).join(','));
+    const { total, registered, subscribed, eligible } = counts;
+    const text = ['📊 **Статистика бота**', '👥 Пользователей в базе: ' + total,
+      '✅ Завершили регистрацию: ' + registered, '🔔 Включили уведомления: ' + subscribed,
+      '📨 Могут получать автоматические отчёты: ' + eligible];
+    if (registered >= 200) text.push('Пора проверить пропускную способность рассылки.');
+    await api(env, 'sendMessage', message(input.id, screen(text.join('\n')))).catch(() => {});
+    return empty();
+  }
   const subject = await subjectFor(input.id, env.WEBHOOK_SECRET);
   let response;
   for (let attempt = 0; attempt < 5; attempt++) {
     const state = await load(env.DB, input.id, input.updateId, subject);
     if (state.duplicate) return empty();
+    state.closedTest = env.CLOSED_TEST === '1';
     response = dialog(state, input, now);
-    if (!response.readOnly && !state.deleted && state.profile && !state.writes.some(([sql]) => sql.startsWith('DELETE FROM achievements'))) {
+    if (response.accrueAwards && state.profile && !state.timelineChanged) {
       saveAwards(state, input.id, achievements(state.intervals, now));
     }
     try {

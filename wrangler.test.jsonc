@@ -21,6 +21,7 @@
     }
   ],
   "vars": {
-    "CLOSED_TEST": "1"
+    "CLOSED_TEST": "1",
+    "OWNER_IS_CLOSED_CHAT": "1"
   }
 }

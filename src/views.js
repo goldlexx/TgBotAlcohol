@@ -2,8 +2,8 @@ import { facts, sources, healthRotation } from '../content/facts.js';
 import { ideas, cravings, lifeLabels } from '../content/ideas.js';
 import { awardCatalog } from '../content/achievements.js';
 import { calculate, MILESTONES } from './calculations.js';
-import { drinkName, formatMoney, hasCalendarBudget, volume } from './habits.js';
-import { DAY, displayTime, observation, today, zoneLabel } from './time.js';
+import { digits, drinkName, formatMoney, hasCalendarBudget, volume } from './habits.js';
+import { DAY, displayTime, hasReportDays, observation, today, zoneLabel } from './time.js';
 import { emergency, hasMedicalRisk, risk, symptoms, privacy } from './safety.js';
 
 export const sections = [
@@ -51,10 +51,20 @@ export function statsFor(state, now) {
   return calculate(state.intervals, state.habits, state.profile.historyZone, now, state.profile.zone);
 }
 const openEpisode = state => state.episodes.at(-1)?.last === null;
+export function reportPause(state) {
+  const reason = hasMedicalRisk(state) ? 'Из-за возможного медицинского риска.'
+    : openEpisode(state) ? 'Пока открыт эпизод употребления.'
+      : state.profile && !hasReportDays(state.profile) ? 'Дни прежнего расписания неизвестны. Выбери дни заново.' : '';
+  return reason ? '**Автоматические отчёты на паузе.** ' + reason + ' Ручной отчёт и статистика доступны.' : '';
+}
 const series = stats => '**' + duration(stats.current) + ' без алкоголя**';
 const partial = value => value ? ' (частично)' : '';
-const moneyLines = stats => [...stats.money].map(([currency, amount]) =>
-  '💰 Сэкономлено: **≈' + formatMoney(amount, currency, true) + '**' + partial(stats.partialCurrencies.has(currency)));
+const moneyLines = stats => [...stats.money].map(([currency, amount]) => {
+  const unit = 10 ** digits(currency);
+  if (amount.isZero()) return '💰 По указанным расходам: **' + formatMoney(0, currency, true) + '**' + partial(stats.partialCurrencies.has(currency));
+  const text = amount.lt(unit) ? 'меньше ' + formatMoney(unit, currency, true) : '≈' + formatMoney(amount, currency, true);
+  return '💰 Сэкономлено: **' + text + '**' + partial(stats.partialCurrencies.has(currency));
+});
 const awardLine = (d, locked = false) => (locked ? '🔒' : awardCatalog[d][0]) + ' ' + label(d) + ' — ' + awardCatalog[d][1];
 const nextText = stats => 'До рубежа — **' + duration(stats.next * DAY - stats.current, true) + '**';
 
@@ -64,24 +74,21 @@ export const metricOptions = {
 };
 export const reportMetrics = ['grams', 'calories'];
 const portion = ['порция', 'порции', 'порций'];
-const beerBottle = ['бутылка пива', 'бутылки пива', 'бутылок пива'];
-const drinkUnits = {
-  beer: { 330: beerBottle, 500: beerBottle },
-  wine: { 150: ['бокал вина', 'бокала вина', 'бокалов вина'], 750: ['бутылка вина', 'бутылки вина', 'бутылок вина'] },
-  sparkling: { 150: ['бокал игристого вина', 'бокала игристого вина', 'бокалов игристого вина'],
-    750: ['бутылка игристого вина', 'бутылки игристого вина', 'бутылок игристого вина'] }
-};
 const drinkGenitives = { beer: 'пива', wine: 'вина', sparkling: 'игристого вина', vodka: 'водки',
   whisky: 'виски', brandy: 'коньяка', cocktail: 'коктейля', other: 'другого напитка' };
 function drinkLine(key, amount) {
   const [drink, ml] = JSON.parse(key);
   const name = drinkGenitives[drink];
-  const forms = drinkUnits[drink]?.[ml] ?? portion.map(word => name ? word + ' ' + name : word);
-  if (amount.lt(1)) return '**Менее одной порции**' + (name ? ' ' + name : '') + ' по ' + volume(ml);
+  const forms = portion.map(word => name ? word + ' ' + name : word);
+  const serving = ' по ' + volume(ml) + (name ? '' : ' · тип не указан');
+  if (amount.lt(1)) return '**Менее одной порции**' + (name ? ' ' + name : '') + serving;
   const count = Math.round(amount.toNumber());
   const index = { one: 0, few: 1, many: 2 }[plurals.select(count)] ?? 2;
-  return '**≈' + number.format(count) + ' ' + forms[index] + '** по ' + volume(ml);
+  return '**≈' + number.format(count) + ' ' + forms[index] + '**' + serving;
 }
+const unnamedDrinks = state => state.habits.flatMap(habit => habit.items
+  .filter(row => row.drink == null).map(row => ({ ...row, effective: habit.effective })));
+const nameButton = state => unnamedDrinks(state).length ? [nav('Уточнить напиток', 'drinkNames')] : [];
 
 function metricLines(profile, stats, mode) {
   const enabled = profile.metrics ?? {};
@@ -97,7 +104,7 @@ function metricLines(profile, stats, mode) {
       lines.push('🥤 Невыпитые порции' + partial(stats.partialDrinks) + ' · пока не начислены');
     }
     if (mode === 'details' && [...stats.drinks.keys()].some(key => JSON.parse(key)[0] === null)) {
-      lines.push('Уточни название напитка в настройках прежней привычки.');
+      lines.push('У старых записей может быть указан объём без названия.');
     }
   }
   if (enabled.days !== false) lines.push('📅 Всего трезвых дней: **' + number.format(stats.days) + '**');
@@ -119,7 +126,7 @@ function progressText(state, stats, mode = 'progress') {
       (stats.earlier ? 'Участок: ' + label(stats.earlier) + ' → ' + label(stats.next) + '\n' : '') +
       bar(stats.percent) + '\n' + nextText(stats));
     const goal = state.profile.goal;
-    if (goal && mode !== 'morning') lines.push(stats.current >= goal * DAY ? '🎯 Личная цель достигнута'
+    if (goal && mode !== 'morning') lines.push(stats.current >= goal * DAY ? '🎯 Личная цель выполнена · ' + label(goal)
       : '🎯 Личная цель — ' + label(goal) + ' · осталось ' + duration(goal * DAY - stats.current, true));
   }
   const metrics = metricLines(state.profile, stats, mode === 'morning' ? mode : 'progress');
@@ -137,6 +144,10 @@ function idea(day, id, group, offset) {
   return pick(ideasByCategory.get(group) ?? ideas, day, id, offset).text;
 }
 const offsetFor = (text, length) => (/^\d{1,4}$/.test(text) ? Number(text) : 0) % length;
+const canPublishFact = fact => !fact.previewOnly || fact.clinical_status === 'approved';
+const publishedRotation = healthRotation.filter(canPublishFact);
+const publishedFacts = facts.filter(canPublishFact);
+const previewNote = 'Предварительный материал закрытого теста. Ожидает врачебной проверки.';
 
 export function report(state, now, id, day, { automatic = false, milestone = null, afterEpisode = false } = {}) {
   if (!state.profile) return screen('☀️ **Утренний отчёт**\n\nНачни отслеживание, чтобы увидеть свой отчёт.', [nav('☀️ Начать', 'begin')]);
@@ -150,8 +161,15 @@ export function report(state, now, id, day, { automatic = false, milestone = nul
   const greeting = milestone ? '🏆 **' + awardCatalog[milestone][2] + '**'
     : afterEpisode ? '☀️ **Твой путь продолжается**' : '☀️ **Доброе утро!**';
   const lines = [...(medical ? ['⚕️ **Медицинская помощь**\n\n' + risk] : []), greeting, progressText(state, stats, 'morning')];
+  if (!medical && p.goal && stats.current >= p.goal * DAY &&
+      today(state.intervals.at(-1).start + p.goal * DAY, p.zone) === day) {
+    lines.push('🎉 **Твоя личная цель достигнута!** ' + label(p.goal) + ' без алкоголя. Счётчик продолжает работать.');
+  }
   const content = p.content ?? 'both';
-  if (['fact', 'both'].includes(content)) lines.push('🫀 **Факт о здоровье**\n\n' + pick(healthRotation, day, id).text);
+  if (['fact', 'both'].includes(content)) {
+    const fact = pick(state.closedTest && !automatic ? healthRotation : publishedRotation, day, id);
+    lines.push('🫀 **Факт о здоровье**\n\n' + fact.text + (canPublishFact(fact) ? '' : '\n' + previewNote));
+  }
   if (['idea', 'both'].includes(content)) lines.push('💡 **Идея дня**\n\n' + idea(day, id));
   return screen(lines.join('\n\n'), ...reportButtons);
 }
@@ -183,20 +201,25 @@ export function view(route, state, now, id) {
   const stats = ['progress', 'details', 'awards'].includes(page) && p ? statsFor(state, now) : null;
   const day = today(now, p?.zone ?? 'UTC');
   switch (page) {
-    case 'menu': return p ? screen('☀️ **Счастье без алкоголя**', ...helpButtons.map(b => [b])) : welcome;
+    case 'menu': return p ? view('progress', state, now, id) : welcome;
     case 'help': return { ...help, readOnly: true };
     case 'emergency': return { ...emergencyView, readOnly: true };
     case 'physical': return { ...physicalView, readOnly: true };
     case 'care': return { ...screen('⚕️ **Куда обратиться**\n\n' + risk +
-      '\n\nДля оценки сегодня обратись к врачу или в отделение неотложной помощи. Обсудить помощь при зависимости можно с врачом-наркологом.',
+      '\n\nДля оценки сегодня обратись к врачу или в отделение неотложной помощи. Обсудить помощь при зависимости можно с врачом-наркологом.' +
+      '\n\n**Официальные справочники**\nМЧС России · https://mchs.gov.ru/deyatelnost/bezopasnost-grazhdan/kak-pravilno-vyzvat-skoruyu_5' +
+      '\nNHS · помощь в Англии · https://www.nhs.uk/nhs-services/find-alcohol-addiction-support-services/' +
+      '\nNIAAA · навигатор помощи в США · https://alcoholtreatment.niaaa.nih.gov/how-to-find-alcohol-treatment' +
+      '\n\n**Взаимопомощь**\nАА · поиск встреч · https://www.aa.org/faq/how-can-i-find-meeting-information' +
+      '\nГруппы могут дать поддержку. При симптомах обратись за медицинской помощью.\n\nСсылки проверены 25.11.2026.',
       [helpButtons[1]], menuButton), readOnly: true };
-    case 'privacy': return screen('🔐 **Мои данные**\n\n' + privacy, [p && offButton(state), nav('Удалить данные', 'delete')].filter(Boolean), back('settings'));
+    case 'privacy': return screen('🔐 **Мои данные**\n\n' + privacy, [p && offButton(state), nav('Удалить данные', 'delete')].filter(Boolean), back(p ? 'settings' : 'menu'));
     case 'morning': return { ...report(state, now, id, day, { automatic: arg === 'preview' }), readOnly: true };
     case 'progress': {
       if (!p) return screen('☀️ **Мой прогресс**\n\nНачни отслеживание, чтобы видеть свой прогресс.', [nav('☀️ Начать', 'begin')], helpButtons);
-      return screen((arg === 'new' ? '☀️ **Твой путь начался!**' : '☀️ **Мой прогресс**') + '\n\n' + progressText(state, stats, arg === 'new' ? 'onboarding' : 'progress'),
+      return { ...screen((arg === 'new' ? '☀️ **Твой путь начался!**' : '☀️ **Мой прогресс**') + '\n\n' + progressText(state, stats, arg === 'new' ? 'onboarding' : 'progress'),
         [nav('📊 Подробная статистика', 'details')], [nav('📅 История', 'history'), nav('ℹ️ Как считаем', 'method.progress')],
-        [noteEpisode], openEpisode(state) ? [nav('Завершить эпизод', 'episode.time')] : []);
+        openEpisode(state) ? [nav('Завершить эпизод', 'episode.time')] : [noteEpisode]), accrueAwards: true };
     }
     case 'details': {
       if (!p) return welcome;
@@ -208,7 +231,15 @@ export function view(route, state, now, id) {
         chunk.rows.join('\n'),
         '🏆 Достижения: **' + stats.awards.length + ' из ' + MILESTONES.length + '**' +
           (stats.awards.length ? '\n' + stats.awards.map(d => awardLine(d)).join('\n') : '')
-      ].filter(Boolean).join('\n\n'), chunk.buttons, [nav('ℹ️ Как считаем', 'method.details')], back('progress'));
+      ].filter(Boolean).join('\n\n'), chunk.buttons, nameButton(state), [nav('ℹ️ Как считаем', 'method.details')], back('progress'));
+    }
+    case 'drinkNames': {
+      if (!p) return welcome;
+      const rows = unnamedDrinks(state);
+      const chunk = paginate(rows, arg, 'drinkNames');
+      return screen('🥤 **Уточнить напиток**\n\n' + (rows.length ? 'Выбери запись. Объём, крепость, частота и расходы сохранятся.' : 'Все сохранённые напитки уже подписаны.'),
+        ...chunk.rows.map(row => [nav(displayTime(row.effective, p.historyZone) + ' · ' + volume(row.ml) + ' · №' + (row.line + 1),
+          'name.' + row.effective + '.' + row.line)]), chunk.buttons, back('details'));
     }
     case 'metrics': {
       if (!p) return welcome;
@@ -242,19 +273,25 @@ export function view(route, state, now, id) {
         '🔔 Утренний отчёт: ' + freq[p.frequency] + (p.frequency === 'off' ? '' : ' в ' + p.clock),
         '🌍 Часовой пояс: ' + zoneLabel(p.zone, now), '🎯 Цель: ' + (p.goal ? label(p.goal) : 'без ограничений')
       ].join('\n'),
-      [nav('📅 Дата и история', 'history'), noteEpisode],
-      [nav('📊 Прежняя привычка', 'edit.habit'), nav('💰 Экономия', 'edit.mode')],
-      [nav('🎯 Цель', 'edit.goal'), nav('📊 Показатели прогресса', 'metrics')],
+      [nav('📅 Дата и история', 'history')],
+      [nav('💰 Привычка и экономия', 'habitSettings')],
+      [nav('🎯 Цель и показатели', 'goalSettings')],
       [nav('🔔 Уведомления', 'notifications'), nav('🌍 Часовой пояс', 'edit.zone')],
-      [nav('ℹ️ Как считаем', 'method.settings'), nav('🔐 Мои данные', 'privacy')],
-      [nav('🆘 Медицинская помощь', 'help')], back());
+      [nav('ℹ️ О боте и мои данные', 'aboutSettings')],
+      [nav('⚕️ Медицинская помощь', 'help')]);
     }
+    case 'habitSettings': return p ? screen('💰 **Привычка и экономия**', [nav('Прежняя привычка', 'edit.habit')],
+      [nav('Способ расчёта', 'edit.mode')], [nav('Прошлые версии', 'habits')], nameButton(state), back('settings')) : welcome;
+    case 'goalSettings': return p ? screen('🎯 **Цель и показатели**', [nav('Личная цель', 'edit.goal')],
+      [nav('📊 Показатели прогресса', 'metrics')], back('settings')) : welcome;
+    case 'aboutSettings': return screen('ℹ️ **О боте и мои данные**\n\nНЕ ПЬЮ | Счастье без алкоголя',
+      [nav('Как считаем', 'method.settings'), nav('Мои данные', 'privacy')], back('settings'));
     case 'notifications':
       if (!p) return welcome;
       return screen('🔔 **Уведомления**\n\nУтренний отчёт: ' + freq[p.frequency] + (p.frequency === 'off' ? '' : ' в ' + p.clock) +
-        (hasMedicalRisk(state) || openEpisode(state) ? '\nАвтоматическая отправка на паузе.' : '') +
+        (reportPause(state) ? '\n\n' + reportPause(state) : '') +
         '\nСодержание: ' + contentNames[p.content ?? 'both'] +
-        '\nПревью: ' + (p.privatePush ? 'Твой отчёт готов' : 'обычный отчёт'),
+        '\nПревью: ' + (p.privatePush ? 'Твой отчёт готов' : 'обычный отчёт') + '\n\nКоманда /morning открывает отчёт вручную.',
       [nav(p.frequency === 'off' ? 'Включить отчёты' : 'Частота и время', 'edit.notify')],
       [nav('Содержание', 'edit.content'), nav('Формат превью', 'edit.push')],
       p.frequency === 'off' ? [] : [offButton(state)], [nav('Открыть отчёт', 'morning'), nav('Превью', 'morning.preview')], back('settings'));
@@ -265,7 +302,10 @@ export function view(route, state, now, id) {
       rows.push({ id: 'base', text: 'Начало отслеживания · ' + observation(p.base, p.historyZone) });
       const chunk = paginate(rows, arg, 'history');
       return screen('📅 **История прогресса**\n\n' + zoneLabel(p.historyZone, now) + '\nПолных трезвых дней: **' + statsFor(state, now).days + '**\n\n' +
-        chunk.rows.map(row => row.text).join('\n'), ...chunk.rows.map(row => [nav(row.id === 'base' ? 'Исправить начальную дату' : 'Исправить · ' + row.text.slice(0, 17), 'correct.' + row.id)]),
+        chunk.rows.map(row => row.text).join('\n'), ...chunk.rows.map(row => row.id === 'base'
+          ? [nav('Исправить начальную дату', 'correct.base')] : [nav('✏️ ' + row.text.slice(0, 17), 'correct.' + row.id),
+            nav('Удалить', 'remove.' + row.id)]),
+      openEpisode(state) ? [nav('Завершить эпизод', 'episode.time')] : [noteEpisode],
       [nav('Серии без алкоголя', 'periods')], chunk.buttons, back('progress'));
     }
     case 'periods': {
@@ -285,7 +325,7 @@ export function view(route, state, now, id) {
       if (p && !openEpisode(state) && nextAward > stats.current / DAY) {
         lines.push('🎁 До следующей награды — **' + duration(nextAward * DAY - stats.current, true) + '**');
       }
-      return screen(lines.filter(Boolean).join('\n\n'), back());
+      return { ...screen(lines.filter(Boolean).join('\n\n'), back()), accrueAwards: true };
     }
     case 'life': {
       const category = lifeLabels.find(([, key]) => key === arg);
@@ -313,17 +353,21 @@ export function view(route, state, now, id) {
     }
     case 'relief': return hasMedicalRisk(state) || openEpisode(state) ? riskView : screen('Ещё одна волна позади. Продолжай в своём темпе. ☀️', back('craving'));
     case 'recovery': {
-      const factText = (...ids) => ids.map(key => facts.find(fact => fact.id === key).text).join('\n');
+      const factText = rows => rows.map(([icon, key]) => {
+        const fact = facts.find(item => item.id === key);
+        return icon + ' **' + fact.category + '**\n' + fact.text;
+      }).join('\n\n');
       return screen(['🫀 **Восстановление организма**',
         'Это ориентиры из исследований. Они описывают наблюдения в группах. Темпы восстановления индивидуальны.',
-        '**Первые дни**\n' + factText('sleep'),
-        '**Наблюдения примерно за месяц**\n' + factText('pressure', 'liver'),
-        '**Исследования на протяжении месяцев**\n' + factText('memory', 'attention')].join('\n\n'),
-      [nav('📅 Все наблюдения', 'stages')], [nav('ℹ️ Методика и источники', 'method.recovery')], back());
+        '**Первые дни**\n\n' + factText([['😴', 'sleep']]),
+        '**Наблюдения примерно за месяц**\n\n' + factText([['❤️', 'pressure'], ['🫀', 'liver']]),
+        '**Исследования на протяжении месяцев**\n\n' + factText([['🧠', 'memory'], ['🎯', 'attention']])].join('\n\n'),
+      [nav('📅 Все наблюдения', 'stages')], [nav('🔬 Научные источники', 'sources.recovery')], [nav('ℹ️ Методика и источники', 'method.recovery')], back());
     }
     case 'stages': {
-      const chunk = paginate(facts, arg, 'stages', 4);
-      return screen('🫀 **Наблюдения о восстановлении**\n\n' + chunk.rows.map(f => '**' + f.category + '**\n' + f.text).join('\n\n'),
+      const chunk = paginate(state.closedTest ? facts : publishedFacts, arg, 'stages', 4);
+      return screen('🫀 **Наблюдения о восстановлении**\n\n' + chunk.rows.map(f => '**' + f.category + '**\n' + f.text +
+        (canPublishFact(f) ? '' : '\n' + previewNote + '\n' + sources[f.source_id][2])).join('\n\n'),
         chunk.buttons, [nav('🔬 Научные источники', 'sources.recovery')], back('recovery'));
     }
     case 'method': return screen('ℹ️ **Как считаем**\n\n💰 Экономия и 🥤 невыпитые порции — оценки по прежней привычке и указанным объёмам.\n⚖️ Чистый этанол — по объёму и крепости напитков.\n🔥 Калории — по энергетической ценности этанола.\n📅 Трезвые дни и выходные — по указанной истории употребления.',
