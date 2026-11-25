@@ -62,8 +62,10 @@ export const drinks = {
   other: ['Другое', [100, 150, 250, 500], [5, 10, 15, 20, 40]]
 };
 export const drinkName = key => Object.hasOwn(drinks, key) ? drinks[key][0] : key === 'budget' ? 'Расходы' : 'Напиток';
+export const hasCalendarBudget = habit => habit.mode === 'calendar' && habit.items.some(row => row.drink === 'budget' && row.price !== null);
+const volumeNumber = new Intl.NumberFormat('ru', { maximumFractionDigits: 4 });
 export const volume = ml => ml === null ? 'объём не указан'
-  : ml >= 1000 ? new Intl.NumberFormat('ru').format(ml / 1000) + ' л' : ml + ' мл';
+  : ml >= 1000 && Number.isInteger(ml * 10) ? volumeNumber.format(ml / 1000) + ' л' : volumeNumber.format(ml) + ' мл';
 export const formatMoney = (amount, currency, rounded = false) => new Intl.NumberFormat('ru', {
   style: 'currency', currency, ...(rounded ? { maximumFractionDigits: 0 } : {})
 }).format(Number(amount) / 10 ** digits(currency));

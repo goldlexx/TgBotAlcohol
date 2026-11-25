@@ -1,3 +1,5 @@
+import { medicalHold } from './safety.js';
+
 export const stmt = (db, sql, ...args) => db.prepare(sql).bind(...args);
 export const first = (db, sql, ...args) => stmt(db, sql, ...args).first();
 
@@ -13,8 +15,13 @@ export async function load(db, id, updateId = -1, subject = '') {
   ])).map(row => row.results);
   const [user] = rows[0];
   const items = Map.groupBy(rows[4], row => row.effective);
+  const profile = user?.profile ? JSON.parse(user.profile) : null;
+  if (profile && Object.hasOwn(profile, 'trackingPaused')) {
+    profile.medicalHold = medicalHold(profile);
+    delete profile.trackingPaused;
+  }
   return {
-    user, profile: user?.profile ? JSON.parse(user.profile) : null,
+    user, profile,
     fsm: user ? JSON.parse(user.fsm) : {}, neutral: Boolean(user?.neutral),
     episodes: rows[1], intervals: rows[2],
     habits: rows[3].map(row => ({ ...row, items: items.get(row.effective) ?? [] })),

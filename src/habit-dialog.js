@@ -1,13 +1,13 @@
 import Decimal from 'decimal.js';
-import { currencyCode, decimal, drinkName, drinks, formatMoney, minor, volume } from './habits.js';
+import { currencyCode, decimal, drinkName, drinks, formatMoney, hasCalendarBudget, minor, volume } from './habits.js';
 import { back, nav, screen } from './views.js';
 
 const days = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 const pairs = rows => rows.filter((_, i) => i % 2 === 0).map((_, i) => rows.slice(i * 2, i * 2 + 2));
 const money = (value, currency) => {
-  const suffix = /(?:[₽$€£]|[A-Za-z]{3})$/.exec(value)?.[0];
+  const suffix = /(?:[₽$€£]|[A-Za-z]{3}|руб(?:\.|лей)?)$/iu.exec(value)?.[0];
   const aliases = { '$': 'USD', '€': 'EUR', '£': 'GBP' };
-  if (suffix && currencyCode(aliases[suffix] ?? suffix) !== currency) throw new Error('currency');
+  if (suffix && currencyCode(/^руб/i.test(suffix) ? 'RUB' : aliases[suffix] ?? suffix) !== currency) throw new Error('currency');
   return minor(suffix ? value.slice(0, -suffix.length) : value, currency);
 };
 const decimalText = value => String(value).replace('.', ',');
@@ -17,18 +17,22 @@ function entriesOf(habit) {
   if (!habit) return [];
   const { items, period } = habit;
   if (habit.mode === 'average') return items.map(row => ({ ...row, period }));
-  return [...Map.groupBy(items, row => JSON.stringify([row.drink, row.portions, row.ml, row.abv, row.price])).values()]
+  const calendarBudget = hasCalendarBudget(habit);
+  const entries = calendarBudget ? items.map(row => row.drink === 'budget' ? row : { ...row, price: null }) : items;
+  return [...Map.groupBy(entries, row => JSON.stringify([row.drink, row.portions, row.ml, row.abv, row.price])).values()]
     .map(rows => ({ ...rows[0], days: rows.map(row => row.weekday), period }));
 }
 
 export function habitDraft(habit, mode = habit?.mode ?? 'average', correction) {
   const saved = habit?.mode === mode ? habit : null;
-  return { flow: 'edit', mode, currency: habit?.currency ?? 'RUB', entries: entriesOf(saved), budget: saved?.budget ?? null,
+  return { flow: correction === undefined ? 'edit' : 'habitfix', mode, currency: habit?.currency ?? 'RUB', entries: entriesOf(saved), budget: saved?.budget ?? null,
     budgetPeriod: saved?.period ?? 7, ...(correction === undefined ? {} : { correction }) };
 }
 
 function frequency(entry) {
-  return entry.days ? weekText(entry.days) : entry.portions + ' раз за ' + (entry.period === 7 ? 'неделю' : '28 дней');
+  const count = entry.portions;
+  const unit = Number.isInteger(count) && count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 12 || count % 100 > 14) ? ' раза' : ' раз';
+  return entry.days ? weekText(entry.days) : decimalText(count) + unit + ' за ' + (entry.period === 7 ? 'неделю' : '28 дней');
 }
 
 function build(f) {
@@ -46,7 +50,8 @@ export function habitPrompt(f, error = '') {
   const b = (text, action) => ({ text, callback_data: f.token + ':' + action });
   const form = (text, ...rows) => screen(text.replace(/^[^\n]+/, heading => '**' + heading + '**') +
     (error ? '\n\n' + error : ''), ...rows,
-    f.step === 'habit.home' || f.step === 'habit.mode' ? back('settings') : [b('Назад', 'back')]);
+    f.step === 'habit.home' || f.step === 'habit.mode' || (f.step === 'habit.review' && f.correction !== undefined)
+      ? back(f.correction === undefined ? 'settings' : 'habits') : [b('Назад', 'back')]);
   const d = f.draft;
   switch (f.step.slice(6)) {
     case 'home': return form('💰 Твоя экономия\n\nСравни расходы и количество алкоголя с прежней привычкой.',
@@ -55,11 +60,11 @@ export function habitPrompt(f, error = '') {
       f.entries.length || f.budget !== null ? [b('Отключить оценку', 'clear')] : [],
       [nav('Настроить позже', 'progress'), nav('Исправить прошлую версию', 'habits')]);
     case 'mode': return form('💰 Расчёт экономии\n\nСредний расчёт прибавляет оценку постепенно. В календарном расчёте учитываются полные трезвые дни по прежнему графику.' +
-      '\n\nПри переходе на другую модель укажи прежний график заново. Исторические оценки сохранятся.',
+      '\n\nДля новой модели укажи график и выбери источник расходов: общий бюджет или цены напитков. История сохранится.',
       [b('Среднесуточный', 'average'), b('Календарный', 'calendar')]);
     case 'drink': return form('🍽 Какой напиток был привычным?',
       ...pairs(Object.entries(drinks).map(([key, row]) => b(row[0], key))));
-    case 'freq': return form('📆 Как часто в среднем?',
+    case 'freq': return form('📆 Как часто в среднем?\n\n«По выходным» означает два раза за неделю для усреднённого расчёта.',
       [b('Каждый день', 'daily'), b('Несколько раз в неделю', 'weekly')],
       [b('По выходным', 'weekend'), b('Несколько раз в месяц', 'monthly')], [b('Указать самостоятельно', 'manual')]);
     case 'freqPeriod': return form('📆 За какой период удобнее вспомнить частоту?',
@@ -76,11 +81,11 @@ export function habitPrompt(f, error = '') {
       ...pairs(drinks[d.drink ?? 'other'][2].map(abv => b(decimalText(abv) + '%', String(abv)))), [b('Другая', 'manual'), b('Не помню', 'unknown')]);
     case 'abvInput': return form('🧾 Введи крепость в процентах, например 5,5%.');
     case 'cost': return form('💰 Сколько обычно стоил указанный объём?\n\nНапример, 500 в выбранной валюте.' +
-      (f.budget === null ? '' : ' Цена за напиток заменит общий бюджет.'),
+      (f.budget === null && !f.entries.some(row => row.drink === 'budget') ? '' : ' Цена за напиток заменит общий бюджет в этой версии.'),
       [b('Пропустить', 'skip'), b('Другая валюта', 'currency')]);
     case 'currency': return form('💱 Выбери валюту. При смене валюты укажи расходы заново.\n\nМожно ввести код другой валюты.',
       [b('₽ Рубли', 'RUB'), b('€ Евро', 'EUR')], [b('$ Доллары США', 'USD'), b('£ Фунты', 'GBP')]);
-    case 'budgetType': return form('💰 За какой период проще назвать расходы?',
+    case 'budgetType': return form('💰 За какой период проще назвать расходы?\n\nОбщий бюджет заменит отдельные цены в этой версии.',
       ...(f.mode === 'calendar' ? [] : [[b('За неделю', '7'), b('За месяц (28 дней)', '28')]]),
       [b('За привычный день', 'once'), b('Другая валюта', 'currency')]);
     case 'budgetInput': return form('💰 Введи примерную сумму, например 1 200,50.',
@@ -117,7 +122,7 @@ export function handleHabit(f, enter, action, input, commit) {
   const applied = (target, patch) => go(target, { draft: { ...f.draft, ...patch } });
   const error = text => habitPrompt(f, text);
   const draft = () => ({ drink: null, ml: null, abv: null, price: null, portions: 1, period: 7, days: f.mode === 'calendar' ? [] : null });
-  const reviewEntry = row => {
+  const reviewEntry = (row, replaceBudget = false) => {
     const entries = [...f.entries];
     if (f.index === null) entries.push(row);
     else entries[f.index] = row;
@@ -127,13 +132,14 @@ export function handleHabit(f, enter, action, input, commit) {
     } else if (row.drink === 'budget') {
       go('review', { entries: entries.filter((e, i) => e.drink !== 'budget' || i === (f.index ?? entries.length - 1))
         .map(e => e.drink === 'budget' ? e : { ...e, price: null }), draft: null });
+    } else if (replaceBudget) {
+      go('review', { entries: entries.filter(e => e.drink !== 'budget'), budget: null, draft: null });
     } else go('review', { entries, draft: null });
   };
-  const chooseField = () => f.draft.drink === 'budget' ? 'budgetType' : 'fields';
   const saveField = (patch, target) => {
     const row = { ...f.draft, ...patch };
-    if (f.single || target === 'review') reviewEntry(row);
-    else applied(target, patch);
+    if (f.single || target === 'review') reviewEntry(row, patch.price != null);
+    else go(target, { draft: row, ...(target === 'vol' ? { volumeBack: step === 'countInput' ? 'count' : step } : {}) });
   };
   const frequencyTarget = () => f.draft.drink === 'budget' ? 'review' : 'vol';
   const setCurrency = v => {
@@ -145,12 +151,13 @@ export function handleHabit(f, enter, action, input, commit) {
         : f.entries.slice(0, f.index).filter(row => row.drink !== 'budget').length } : {});
   };
   if (action === 'back') {
-    const previous = { drink: 'review', freq: 'drink', freqPeriod: 'freq', count: 'freq', countInput: 'count', days: 'freq',
-      vol: f.mode === 'calendar' ? 'days' : 'freq', volInput: 'vol', abv: 'vol', abvInput: 'abv', cost: 'abv',
-      currency: f.currencyFrom, budgetType: 'review', budgetInput: 'budgetType', fields: 'review', review: 'home' };
+    const previous = { drink: f.drinkBack ?? 'review', freq: f.draft?.drink === 'budget' ? 'budgetInput' : 'drink',
+      freqPeriod: 'freq', count: f.countBack ?? 'freq', countInput: 'count',
+      days: f.draft?.drink === 'budget' ? 'budgetInput' : 'drink',
+      vol: f.volumeBack ?? (f.mode === 'calendar' ? 'days' : 'freq'), volInput: 'vol', abv: 'vol', abvInput: 'abv', cost: 'abv',
+      currency: f.currencyFrom, budgetType: f.budgetBack ?? 'review', budgetInput: 'budgetType', fields: 'review', review: 'home' };
     let target = previous[step] ?? 'home';
-    if (step === 'days' && f.mode === 'calendar') target = f.draft.drink === 'budget' ? 'budgetInput' : 'drink';
-    if (step !== 'fields' && f.single && fields.includes(step)) target = chooseField();
+    if (step !== 'fields' && f.single && fields.includes(step)) target = 'fields';
     go(target);
     return;
   }
@@ -158,8 +165,8 @@ export function handleHabit(f, enter, action, input, commit) {
     case 'home':
       if (action === 'full') {
         if (f.entries.some(row => row.drink !== 'budget')) go('review');
-        else go('drink', { draft: draft(), index: null, single: false });
-      } else if (action === 'money') go('budgetType', { draft: { ...draft(), drink: 'budget' }, entries: [], index: null, single: false });
+        else go('drink', { draft: draft(), index: null, single: false, drinkBack: 'home' });
+      } else if (action === 'money') go('budgetType', { draft: { ...draft(), drink: 'budget' }, index: null, single: false, budgetBack: 'home' });
       else if (action === 'review') go('review');
       else if (action === 'clear') go('review', { entries: [], budget: null });
       else return error('Выбери вариант кнопкой.');
@@ -180,12 +187,12 @@ export function handleHabit(f, enter, action, input, commit) {
     case 'freq':
       if (action === 'daily') saveField({ portions: 7, period: 7 }, frequencyTarget());
       else if (action === 'weekend') saveField({ portions: 2, period: 7 }, frequencyTarget());
-      else if (['weekly', 'monthly'].includes(action)) applied('count', { period: action === 'weekly' ? 7 : 28 });
+      else if (['weekly', 'monthly'].includes(action)) go('count', { countBack: 'freq', draft: { ...f.draft, period: action === 'weekly' ? 7 : 28 } });
       else if (action === 'manual') go('freqPeriod');
       else break;
       return;
     case 'freqPeriod':
-      if (['7', '28'].includes(action)) { applied('count', { period: Number(action) }); return; }
+      if (['7', '28'].includes(action)) { go('count', { countBack: 'freqPeriod', draft: { ...f.draft, period: Number(action) } }); return; }
       break;
     case 'count':
     case 'countInput':
@@ -231,9 +238,6 @@ export function handleHabit(f, enter, action, input, commit) {
       if (action === 'currency') { go('currency', { currencyFrom: 'cost' }); return; }
       if (action === 'skip' || input) {
         const price = action === 'skip' ? null : money(input, f.currency);
-        if (f.budget !== null && price !== null) {
-          f.budget = null;
-        }
         saveField({ price }, 'review');
         return;
       }
@@ -254,19 +258,23 @@ export function handleHabit(f, enter, action, input, commit) {
         if (f.budgetType === 'once') {
           go(f.mode === 'calendar' ? 'days' : 'freq', { draft: { ...draft(), drink: 'budget', price: amount }, single: false });
         } else {
-          go('review', { budget: amount, budgetPeriod: Number(f.budgetType), entries: f.entries.map(row => ({ ...row, price: null })) });
+          go('review', { budget: amount, budgetPeriod: Number(f.budgetType),
+            entries: f.entries.filter(row => row.drink !== 'budget').map(row => ({ ...row, price: null })) });
         }
         return;
       }
       break;
     case 'review':
-      if (action === 'save') return commit(build(f), f.correction);
-      if (action === 'add' && f.entries.length < 16) { go('drink', { draft: draft(), index: null, single: false }); return; }
-      if (action === 'money') { go('budgetType', { draft: { ...draft(), drink: 'budget' }, index: null, single: false }); return; }
+      if (action === 'save') {
+        if (f.correction !== undefined && f.flow !== 'habitfix') return error('Открой нужную версию истории заново.');
+        return commit(build(f), f.correction);
+      }
+      if (action === 'add' && f.entries.length < 16) { go('drink', { draft: draft(), index: null, single: false, drinkBack: 'review' }); return; }
+      if (action === 'money') { go('budgetType', { draft: { ...draft(), drink: 'budget' }, index: null, single: false, budgetBack: 'review' }); return; }
       if (/^edit\d+$/.test(action)) {
         const index = Number(action.slice(4)), row = f.entries[index];
         if (row) {
-          if (row.drink === 'budget') go('budgetType', { draft: { ...row }, index, single: false });
+          if (row.drink === 'budget') go('budgetType', { draft: { ...row }, index, single: false, budgetBack: 'review' });
           else go('fields', { draft: { ...row }, index, single: true });
           return;
         }

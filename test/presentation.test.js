@@ -13,7 +13,7 @@ const state = { profile: { zone: 'UTC', historyZone: 'UTC' }, neutral: false, ep
 
 test('HTML экранирует теги, амперсанд и оставляет только собственное выделение', () => {
   assert.equal(renderHtml('**Мой прогресс** <a> A&B'), '<b>Мой прогресс</b> &lt;a&gt; A&amp;B');
-  assert.match(renderHtml(bar(45)), /^█{5}░{5} <b>45%<\/b>$/);
+  assert.match(renderHtml(bar(45)), /^▰{5}▱{5} <b>45%<\/b>$/);
 });
 
 test('Достижения на одном экране, разные названия и точный отсчёт', () => {
@@ -46,11 +46,49 @@ test('Все подборки проходят полный цикл без см
     const seen = new Set();
     for (let i = 0; i < entries.length; i++) {
       const item = view(route, state, now, 1);
-      const advice = item.text.split('\n\n')[2];
+      const advice = item.text.split('\n\n')[3];
       assert.ok(entries.includes(advice) && !seen.has(advice));
       seen.add(advice);
       route = item.buttons.flat().find(b => b.text.includes('Другой совет')).callback_data.slice(2);
     }
   }
   assert.doesNotMatch(view('crave.work', { ...state, neutral: true }, now, 1).text, /Попробуй сейчас/);
+});
+
+test('Текст и клавиатуры отделяют медицинскую помощь от статистики и советов', () => {
+  const recovery = view('recovery', state, now, 1).text;
+  assert.match(recovery, /наблюдения в группах/);
+  assert.doesNotMatch(recovery, /На этом этапе|Что может измениться дальше|180 дней/);
+  const craving = view('craving', state, now, 1);
+  assert.ok(craving.text.indexOf('физически плохо') < craving.text.indexOf('отложить решение'));
+  assert.deepEqual(craving.buttons.slice(0, 2).map(row => row[0].callback_data), ['n:physical', 'n:emergency']);
+  const progress = view('progress', state, now, 1);
+  assert.match(progress.text, /Участок: 7 дней → 14 дней/);
+  assert.match(progress.text, /дней: \*\*\d+\*\*\n☀️/);
+  assert.equal(progress.buttons[0].length, 1);
+});
+
+test('Нулевое календарное начисление и неизвестная привычка отображаются по-разному', () => {
+  const from = state.intervals[0].start;
+  const make = (mode, portions) => ({
+    ...state, habits: [{ effective: from, mode, period: 7, budget: null, currency: 'RUB',
+      items: [{ drink: null, portions, ml: 1000, abv: 5, price: null, weekday: 6 }] }]
+  });
+  const short = from + 3_600_000;
+  const progress = view('progress', make('average', 7), short, 1).text;
+  assert.match(progress, /Менее одной порции\*\* по 1 л/);
+  assert.doesNotMatch(progress, /≈0 порций|порции напитка/);
+  assert.match(view('details', make('calendar', 7), short, 1).text, /пока не начислены/);
+  assert.match(view('details', make('calendar', 7), short, 1).text, /Уточни название/);
+  assert.doesNotMatch(view('details', state, short, 1).text, /Невыпитые порции/);
+  assert.match(view('progress', make('average', 7), now, 1).text, /≈9 порций\*\* по 1 л/);
+});
+
+test('Ручной отчёт поздравляет в местную дату достижения рубежа', () => {
+  const end = Date.parse('2026-03-10T22:00Z');
+  const start = end - 30 * DAY;
+  const sample = { ...state, profile: { ...state.profile, zone: 'Europe/Moscow', privatePush: true },
+    intervals: [{ start, end: null, precision: 'minute' }] };
+  assert.match(view('morning', sample, end + 60_000, 1).text, new RegExp(awardCatalog[30][2]));
+  assert.doesNotMatch(view('morning', sample, end + DAY, 1).text, new RegExp(awardCatalog[30][2]));
 });

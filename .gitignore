@@ -9,4 +9,6 @@ node_modules/
 *.dump
 *.log
 backups/
+*.sql.gz
+audit-results.json
 wrangler.test.local.jsonc

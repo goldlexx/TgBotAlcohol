@@ -1,5 +1,6 @@
 import Decimal from 'decimal.js';
 import { DAY, completeDates } from './time.js';
+import { hasCalendarBudget } from './habits.js';
 
 export const MILESTONES = [1, 3, 7, 14, 30, 60, 90, 180, 365, 730, 1095, 1825];
 export const reached = ms => MILESTONES.filter(days => days * DAY <= ms);
@@ -9,11 +10,12 @@ export function achievements(intervals, now) {
   return reached(Math.max(0, ...intervals.map(period => elapsed(period, now))));
 }
 
-function estimate(habit, start, end, zone, excludeStart) {
+function estimate(habit, start, end, zone) {
   let grams = null;
   const drinks = new Map();
   let money = habit.budget === null ? null : new Decimal(habit.budget);
-  const dates = habit.mode === 'calendar' ? completeDates(start, end, zone, excludeStart) : null;
+  const dates = habit.mode === 'calendar' ? completeDates(start, end, zone) : null;
+  const calendarBudget = hasCalendarBudget(habit);
   for (const row of habit.items) {
     let count = new Decimal(row.portions);
     if (dates) {
@@ -28,7 +30,7 @@ function estimate(habit, start, end, zone, excludeStart) {
     if (row.ml !== null && row.abv !== null) {
       grams = (grams ?? new Decimal(0)).plus(count.times(row.ml).times(row.abv).times('0.00789'));
     }
-    if (habit.budget === null && row.price !== null) {
+    if (habit.budget === null && row.price !== null && (!calendarBudget || row.drink === 'budget')) {
       money = (money ?? new Decimal(0)).plus(count.times(row.price));
     }
   }
@@ -36,7 +38,7 @@ function estimate(habit, start, end, zone, excludeStart) {
   return {
     grams: grams?.times(factor), money: money?.times(factor), drinks, factor,
     partialGrams: habit.items.some(row => row.ml === null || row.abv === null) || !habit.items.length,
-    partialMoney: habit.budget === null && (!habit.items.length || habit.items.some(row => row.price === null))
+    partialMoney: habit.budget === null && !calendarBudget && (!habit.items.length || habit.items.some(row => row.price === null))
   };
 }
 
@@ -47,7 +49,7 @@ export function calculate(intervals, habits, zone, now, progressZone = zone) {
   for (const period of intervals) {
     const end = Math.min(period.end ?? now, now);
     if (end <= period.start) continue;
-    const { first, count } = completeDates(period.start, end, progressZone, period.precision !== 'day');
+    const { first, count } = completeDates(period.start, end, progressZone);
     days += count;
     const untilSaturday = (6 - first.dayOfWeek + 7) % 7;
     weekends += Math.max(0, Math.floor((count - untilSaturday + 5) / 7));
@@ -56,7 +58,7 @@ export function calculate(intervals, habits, zone, now, progressZone = zone) {
       const from = Math.max(period.start, habit.effective);
       const to = Math.min(end, habits[index + 1]?.effective ?? end);
       if (to <= from) continue;
-      const values = estimate(habit, from, to, zone, from === period.start && period.precision !== 'day');
+      const values = estimate(habit, from, to, zone);
       partialDrinks ||= habit.items.some(row => row.drink !== 'budget' && row.ml === null);
       for (const [key, count] of values.drinks) {
         drinks.set(key, (drinks.get(key) ?? new Decimal(0)).plus(count.times(values.factor)));
@@ -71,7 +73,7 @@ export function calculate(intervals, habits, zone, now, progressZone = zone) {
   const current = latest?.end === null ? elapsed(latest, now) : 0;
   const earlier = reached(current).at(-1) ?? 0;
   const next = MILESTONES.find(d => d * DAY > current);
-  const percent = next ? Math.round((current - earlier * DAY) / ((next - earlier) * DAY) * 100) : 100;
+  const percent = next ? Math.min(99, Math.round((current - earlier * DAY) / ((next - earlier) * DAY) * 100)) : 100;
   return { current, longest, days, weekends, drinks, partialDrinks, grams, calories: grams?.times(7),
-    money, partialGrams, partialCurrencies, next, percent, awards: reached(longest) };
+    money, partialGrams, partialCurrencies, earlier, next, percent, awards: reached(longest) };
 }

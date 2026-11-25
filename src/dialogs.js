@@ -1,10 +1,10 @@
-import { cityZone, dateInput, displayDay, localDay, midnight, observation, parseDate, popularZones, today, validClock, zoneLabel, zoneOffset } from './time.js';
+import { cityZone, clockInput, dateInput, displayDay, localDay, midnight, observation, parseDate, popularZones, validClock, zoneLabel, zoneOffset } from './time.js';
 import { timeline } from './history.js';
 import { saveTimeline, saveAwards, saveHabit, reschedule } from './storage.js';
 import { achievements } from './calculations.js';
 import { habitDraft, habitPrompt, handleHabit } from './habit-dialog.js';
 import { slotFor } from './schedule.js';
-import { medicalHold, preview, symptoms, riskHistory, risk } from './safety.js';
+import { hasMedicalRisk, preview, symptoms, riskHistory, risk } from './safety.js';
 import { back, helpButtons, metricOptions, nav, reportMetrics, screen, sections, view, welcome } from './views.js';
 
 export const keys = new Map(sections.flat().map(([text, route]) => [text, route]));
@@ -31,14 +31,13 @@ function prompt(state, now, correction = '') {
   const prev = [b('Назад', 'back')];
   switch (f.step) {
     case 'check': return form('🛡 **Перед началом**\n\n' + symptoms + '\n\nПодробнее о данных в /privacy.',
-      [b('Есть симптомы', 'urgent')], [b('Симптомов сейчас нет', 'next')], [b('Не знаю', 'urgent')], [helpButtons[1]]);
-    case 'background': return form('🛡 **Важный вопрос**\n\n' + riskHistory, [b('Да / Не знаю', 'risk'), b('Нет', 'next')], ...helpButtons.map(b => [b]));
+      [b('Есть симптомы', 'urgent')], [b('Симптомов сейчас нет', 'next')], [b('Не знаю', 'unsure')], [helpButtons[1]]);
+    case 'background': return form('🛡 **Важный вопрос**\n\n' + riskHistory, [b('Да', 'risk'), b('Нет', 'next')], [b('Не знаю', 'unsure')], ...helpButtons.map(b => [b]));
     case 'paused': return form('⚕️ **Медицинская помощь**\n\n' + risk + (f.flow === 'new'
-      ? '\n\nПосле обращения за профессиональной помощью можешь выбрать нейтральное отслеживание уже происходящего воздержания.' : ''),
+      ? '\n\nПосле обращения за профессиональной помощью можно записать дату уже происходящего воздержания.' : ''),
       [helpButtons[1]], [nav('Куда обратиться', 'care')],
-      f.flow === 'new' ? [b('Есть профессиональная помощь · нейтральный режим', 'neutral')]
-        : f.flow === 'complete' ? [b('Продолжить запись эпизода', 'record')]
-          : [b('Настроить нейтральные отчёты', 'neutral')],
+      f.flow === 'new' ? [b('Записать дату', 'record')]
+        : f.flow === 'complete' ? [b('Продолжить запись эпизода', 'record')] : [],
       [nav('Главное меню', 'menu')]);
     case 'zone': {
       const cities = popularZones.map(([name, zone]) => b(name + ' (' + zoneOffset(zone, now) + ')', zone));
@@ -67,7 +66,7 @@ function prompt(state, now, correction = '') {
       [b('Каждый день в 08:00', 'daily8')], [b('Другая частота или время', 'custom')], [b('Выключить', 'off')]);
     case 'frequency': return form('📆 **Дни уведомлений**\n\nКак часто присылать отчёт?',
       [b('Каждый день', 'daily')], [b('В выбранные дни недели', 'selected')],
-      !state.neutral ? [b('Только на рубежах', 'milestones')] : [], prev);
+      [b('Только на рубежах', 'milestones')], prev);
     case 'weekdays': return form('📆 **Выбери дни недели**',
       weekdays.slice(0, 4).map((d, i) => b((f.weekdays.includes(i + 1) ? '✓ ' : '') + d, String(i + 1))),
       weekdays.slice(4).map((d, i) => b((f.weekdays.includes(i + 5) ? '✓ ' : '') + d, String(i + 5))), [b('Готово', 'next')], prev);
@@ -75,7 +74,7 @@ function prompt(state, now, correction = '') {
     case 'content': return form('🔔 **Содержание отчёта**\n\nСтатистика есть в обычном отчёте. Выбери, что ещё добавить.',
       ...contents.map(([title, key]) => [b(title, key)]));
     case 'push': return form('🔐 **Формат превью**\n\nНейтральное сообщение содержит только фразу «Твой отчёт готов».',
-      [b('Обычный отчёт', 'normal'), b('Нейтральное сообщение', 'private')]);
+      [b('Обычный отчёт', 'normal')], [b('Нейтральное сообщение', 'private')]);
     case 'notifyConfirm': return form('🔔 **Подтверди расписание**\n\nОтчёт запланирован на ' + f.clock + ' по местному времени.' +
       (state.profile.frequency === 'off' ? '\n\n' + preview : ''),
       [b(state.profile.frequency === 'off' ? 'Включить отчёты' : 'Сохранить', 'save')], prev);
@@ -107,11 +106,12 @@ function settingsSaved(state, id, now, route = 'settings') {
 function finishDate(state, id, now, date) {
   const f = state.fsm;
   if (f.dateRole === 'base' && f.flow === 'new') {
-    state.profile = { ...defaults, zone: f.zone, historyZone: f.zone, base: date };
+    state.profile = { ...defaults, zone: f.zone, historyZone: f.zone, base: date,
+      ...(state.neutral ? { medicalHold: true } : {}) };
     planTimeline(state, id, now, date, []);
     finish(state);
     return { ...view('progress.new', state, now, id), keyboard: true,
-      followup: state.neutral ? null : screen('Хочешь дополнить свой прогресс расчётом экономии или включить отчёты?',
+      followup: hasMedicalRisk(state) ? null : screen('Хочешь дополнить свой прогресс расчётом экономии или включить отчёты?',
         [nav('💰 Настроить статистику', 'edit.habit')], [nav('🔔 Настроить утренние отчёты', 'edit.notify')],
         [nav('📊 Мой прогресс', 'progress')]) };
   }
@@ -164,10 +164,10 @@ function saveEpisode(state, id, now, f) {
     : view('progress', state, now, id);
 }
 
-function flagNeutral(state, id) {
+function flagMedicalRisk(state, id) {
   state.changed = true;
-  state.neutral = true;
   if (state.profile) state.profile.medicalHold = true;
+  else state.neutral = true;
   reschedule(state, id, null);
 }
 function episodeInput(state, action) {
@@ -187,25 +187,22 @@ function formAction(state, id, now, action, updateId) {
   const finishKnownDay = () => finishDate(state, id, now, parseDate(f.dateDay, f.zone, now, 'day'));
   switch (f.step) {
     case 'check':
-      if (action === 'urgent') { flagNeutral(state, id); return go('paused'); }
+      if (action === 'urgent') { flagMedicalRisk(state, id); return go('paused'); }
+      if (action === 'unsure') return go('paused');
       if (action === 'next') return go('background');
       break;
     case 'background':
-      if (action === 'risk') { flagNeutral(state, id); return go('paused'); }
+      if (action === 'risk') { flagMedicalRisk(state, id); return go('paused'); }
+      if (action === 'unsure') return go('paused');
       if (action === 'next') return f.flow === 'new' ? go('zone') : go('episodeConfirm');
       break;
     case 'paused':
       if (action === 'record' && f.flow === 'complete') return go('episodeConfirm');
-      if (action === 'neutral') {
-        if (f.flow === 'new' && !state.profile) return go('zone', { flow: 'new' });
-        if (f.flow === 'medical' && state.profile && state.neutral) {
-          return go('notify', { ...defaults, ...state.profile, flow: 'edit', neutralOptIn: true });
-        }
-      }
+      if ((action === 'record' || action === 'neutral') && f.flow === 'new' && !state.profile) return go('zone', { flow: 'new', fromMedical: true });
       break;
     case 'zone':
       if (action === 'other') return go('zoneText');
-      if (action === 'back' && f.flow === 'new') return state.neutral ? go('paused') : go('background');
+      if (action === 'back' && f.flow === 'new') return f.fromMedical ? go('paused') : go('background');
       if (popularZones.some(([, z]) => action === z)) return chooseZone(state, id, now, cityZone(action));
       break;
     case 'zoneText': if (action === 'back') return go('zone'); break;
@@ -235,7 +232,7 @@ function formAction(state, id, now, action, updateId) {
       if (['1', '2'].includes(action)) return finishDate(state, id, now, parseDate(f.dateDay + ' ' + f.clockValue + ' ' + action, f.zone, now, 'minute'));
       break;
     case 'goal':
-      if (!state.neutral && ['7', '30', '90', 'none'].includes(action)) {
+      if (['7', '30', '90', 'none'].includes(action)) {
         state.profile.goal = Number(action) || null;
         return settingsSaved(state, id, now);
       }
@@ -247,7 +244,7 @@ function formAction(state, id, now, action, updateId) {
       break;
     case 'frequency':
       if (action === 'back') return go('notify');
-      if (['daily', 'selected', 'milestones'].includes(action) && !(state.neutral && action === 'milestones')) {
+      if (['daily', 'selected', 'milestones'].includes(action)) {
         return go(action === 'selected' ? 'weekdays' : 'clock', { ...f, frequency: action });
       }
       break;
@@ -264,21 +261,20 @@ function formAction(state, id, now, action, updateId) {
       if (action === 'default') return go('notifyConfirm', { ...f, clock: '08:00' });
       break;
     case 'content':
-      if (!state.neutral && contents.some(([, key]) => key === action)) {
+      if (contents.some(([, key]) => key === action)) {
         state.profile.content = action;
         return settingsSaved(state, id, now, 'notifications');
       }
       break;
     case 'push':
-      if (!state.neutral && ['private', 'normal'].includes(action)) {
+      if (['private', 'normal'].includes(action)) {
         state.profile.privatePush = action === 'private';
         return settingsSaved(state, id, now, 'notifications');
       }
       break;
     case 'notifyConfirm':
       if (action === 'back') return go(f.quick ? 'notify' : 'clock');
-      if (action === 'save' && (!medicalHold(state.profile) || (state.neutral && f.neutralOptIn))) {
-        if (f.neutralOptIn) state.profile.medicalHold = false;
+      if (action === 'save') {
         for (const key of ['frequency', 'weekdays', 'clock']) state.profile[key] = f[key];
         return settingsSaved(state, id, now, 'notifications');
       }
@@ -292,7 +288,9 @@ function formAction(state, id, now, action, updateId) {
     case 'episodeConfirm':
       if (action === 'back') {
         const role = f.base ? 'base' : f.last ? 'last' : 'start';
-        return go(role === 'start' ? 'episodeStart' : 'date', { ...f, dateRole: role });
+        return go(role === 'start' ? 'episodeStart' : 'date', {
+          ...f, dateRole: role, ...(role === 'last' && f.flow === 'correct' ? { start: undefined, last: undefined } : {})
+        });
       }
       if (action === 'save') return saveEpisode(state, id, now, { ...f, newId: updateId });
       break;
@@ -322,16 +320,19 @@ function formText(state, id, now, value) {
       return go('dateTime', { dateDay: normalized, viaInput: true });
     }
     case 'dateTime': {
-      if (!validClock(value)) throw new Error('clock');
-      try { return finishDate(state, id, now, parseDate(f.dateDay + ' ' + value, f.zone, now, 'minute')); }
+      const clock = clockInput(value);
+      if (!validClock(clock)) throw new Error('clock');
+      try { return finishDate(state, id, now, parseDate(f.dateDay + ' ' + clock, f.zone, now, 'minute')); }
       catch (error) {
         if (error.message !== 'ambiguous') throw error;
-        return go('dateAmbiguous', { clockValue: value });
+        return go('dateAmbiguous', { clockValue: clock });
       }
     }
-    case 'clock':
-      if (!validClock(value)) throw new Error('clock');
-      return go('notifyConfirm', { clock: value });
+    case 'clock': {
+      const clock = clockInput(value);
+      if (!validClock(clock)) throw new Error('clock');
+      return go('notifyConfirm', { clock });
+    }
     default: return f.step ? prompt(state, now, 'Воспользуйся кнопками.') : view('menu', state, now, id);
   }
 }
@@ -339,15 +340,15 @@ function formText(state, id, now, value) {
 function routeTo(state, id, now, route) {
   const p = state.profile;
   const [page, arg] = route.split('.');
+  if (state.fsm.step && !['help', 'physical', 'emergency', 'care'].includes(page)) finish(state);
   const start = (step, data) => {
     enter(state, step, data);
     return prompt(state, now);
   };
   switch (page) {
-    case 'cancel': finish(state); return view(['history', 'settings'].includes(arg) ? arg : 'menu', state, now, id);
+    case 'cancel': return view(['history', 'settings'].includes(arg) ? arg : 'menu', state, now, id);
     case 'start':
-      finish(state);
-      return p ? { ...view('progress', state, now, id), keyboard: true } : welcome;
+      return p ? { ...screen('☀️ **Счастье без алкоголя**'), keyboard: true, followup: view('progress', state, now, id) } : welcome;
     case 'begin': return p ? view('progress', state, now, id) : start('check', { flow: 'new' });
     case 'metric': {
       if (!p || !Object.hasOwn(metricOptions, arg)) return view('metrics', state, now, id);
@@ -389,8 +390,6 @@ function routeTo(state, id, now, route) {
     }
     case 'edit':
       if (!p) return welcome;
-      if (arg === 'notify' && medicalHold(p) && state.neutral) return start('paused', { flow: 'medical' });
-      if (['goal', 'content', 'push'].includes(arg) && state.neutral) return view('settings', state, now, id);
       if (arg === 'notify') return start('notify', { ...defaults, ...p, flow: 'edit' });
       if (['goal', 'zone', 'content', 'push'].includes(arg)) return start(arg, { flow: 'edit' });
       if (['habit', 'budget', 'mode'].includes(arg)) return start(arg === 'mode' ? 'habit.mode' : 'habit.home', habitDraft(state.habits.at(-1)));
@@ -408,6 +407,9 @@ export function dialog(state, { id, text, callback, updateId }, now) {
   try {
     if (state.fsm.step?.startsWith('habit.')) {
       if (!state.profile) return welcome;
+      if (state.fsm.step === 'habit.review' && state.fsm.correction !== undefined && action === 'back') {
+        return routeTo(state, id, now, 'habits');
+      }
       const result = handleHabit(state.fsm, (step, data) => enter(state, step, data), action, text, (habit, correction) => {
         const last = state.habits.at(-1);
         const effective = correction ?? (last ? Math.max(now, last.effective + 1) : state.profile.base.ms);

@@ -17,7 +17,7 @@ $stage = 'configuration'
 try {
     [void][IO.Directory]::CreateDirectory((Split-Path $statusPath -Parent))
     '{"status":"waiting"}' | Set-Content -LiteralPath $statusPath -Encoding ASCII
-    $config = Get-Content -LiteralPath (Join-Path $root 'wrangler.test.jsonc') -Raw | ConvertFrom-Json
+    $config = Get-Content -LiteralPath (Join-Path $root 'wrangler.test.local.jsonc') -Raw | ConvertFrom-Json
     if ($config.name -ne 'tgbot-alcohol' -or $config.vars.CLOSED_TEST -ne '1') { throw 'Invalid test configuration.' }
 
     $oauthPath = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'xdg.config/.wrangler/config/default.toml'

@@ -3,7 +3,7 @@ import { reached } from './calculations.js';
 import { slotFor } from './schedule.js';
 import { report } from './views.js';
 import { DAY, today } from './time.js';
-import { medicalHold } from './safety.js';
+import { hasMedicalRisk } from './safety.js';
 import { allowed, message, telegram, TelegramError } from './telegram.js';
 
 export const BATCH = 8;
@@ -18,24 +18,29 @@ async function deliver(env, job, now, api) {
   const state = await load(db, id);
   const p = state.profile;
   const series = state.intervals.at(-1);
-  if (!p || medicalHold(p) || p.frequency === 'off' || series?.end !== null) return;
+  const matchesUser = 'EXISTS(SELECT 1 FROM users WHERE id=? AND delivery_epoch=? AND generation=?)';
+  if (!state.user) return; // Jobs have an ON DELETE CASCADE foreign key.
+  const { delivery_epoch: epoch, generation } = state.user;
+  if (!p || hasMedicalRisk(state) || p.frequency === 'off' || series?.end !== null) {
+    await stmt(db, 'DELETE FROM delivery_jobs WHERE user_id=? AND next_due_at=? AND slot=? AND ' + matchesUser,
+      id, job.next_due_at, job.slot, id, epoch, generation).run();
+    return;
+  }
   const seriesId = state.episodes.at(-1)?.id ?? 0;
   const localDate = today(job.slot, p.zone);
   const period = today(now, p.zone);
   const next = slotFor(state, p.frequency === 'milestones' ? Math.max(now, job.slot) : now, period);
   const previous = await first(db, `SELECT *, (SELECT max(milestone) FROM delivery_receipts
-    WHERE user_id=? AND series=? AND status!='retry') AS highest,
+    WHERE user_id=? AND series=? AND status IN ('sent','reserved','unknown')) AS highest,
     EXISTS(SELECT 1 FROM delivery_receipts WHERE user_id=? AND series=? AND status IN ('sent','reserved','unknown')) AS previous_report
     FROM (SELECT 1) LEFT JOIN delivery_receipts ON user_id=? AND local_day=?`, id, seriesId, id, seriesId, id, localDate);
   const fresh = now - job.slot <= FRESH && localDate === period;
   const available = !previous.status || previous.status === 'retry';
   const latest = reached(now - series.start).at(-1);
   const since = p.frequency === 'milestones' ? 8 * DAY : (p.frequency === 'daily' ? 2 : 8) * DAY;
-  const milestone = !state.neutral && latest > (previous.highest ?? 0) && now - (series.start + latest * DAY) < since ? latest : null;
+  const milestone = latest > (previous.highest ?? 0) && now - (series.start + latest * DAY) < since ? latest : null;
   const ready = fresh && available && (p.frequency !== 'milestones' || milestone !== null);
   const attempts = (previous.attempts ?? 0) + 1;
-  const { delivery_epoch: epoch, generation } = state.user;
-  const matchesUser = 'EXISTS(SELECT 1 FROM users WHERE id=? AND delivery_epoch=? AND generation=?)';
   const batch = [
     guard(db, matchesUser, id, epoch, generation),
     guard(db, 'EXISTS(SELECT 1 FROM delivery_jobs WHERE user_id=? AND next_due_at=? AND slot=?)', id, job.next_due_at, job.slot),
@@ -52,7 +57,9 @@ async function deliver(env, job, now, api) {
     throw error;
   }
   if (!ready) return;
-  const outgoing = message(id, report(state, now, id, milestone, localDate, seriesId !== 0 && !previous.previous_report));
+  const outgoing = message(id, report(state, now, id, localDate, {
+    automatic: true, milestone, afterEpisode: seriesId !== 0 && !previous.previous_report
+  }));
   if (!await first(db, 'SELECT 1 FROM users WHERE id=? AND delivery_epoch=? AND generation=?', id, epoch, generation)) return;
   let status = 'sent', retry = null;
   try {

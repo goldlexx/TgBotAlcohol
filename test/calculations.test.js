@@ -61,7 +61,7 @@ test('Версии средняя и календарная, валюты и г�
   ];
   const stats = calculate([range(epoch)], history, 'UTC', date('2025-01-06T00:00Z'));
   assert.deepEqual([...stats.money].map(([code, amount]) => [code, amount.toNumber()]), [['RUB', 60000], ['EUR', 1500], ['USD', 1000]]);
-  assert.equal(stats.days, 4);
+  assert.equal(stats.days, 5);
 });
 
 test('Эпизод приостанавливает и поздняя коррекция пересчитывает историю и награды', () => {
@@ -74,7 +74,7 @@ test('Эпизод приостанавливает и поздняя корре
   const stats = calc([closed]);
   assert.deepEqual(stats.awards, [1, 3]);
   assert.equal(stats.current, 2 * DAY);
-  assert.equal(stats.days, 6);
+  assert.equal(stats.days, 8);
   close(stats.money.get('RUB'), 80000);
   assert.throws(() => timeline(base, [open, { ...closed, start: epoch + DAY * 9 }]));
 });
@@ -153,4 +153,42 @@ test('Полные выходные учитывают пояс, DST, грани
   assert.equal(resumed.days, 14);
   assert.equal(resumed.weekends, 2);
   assert.equal(resumed.current, 7 * DAY);
+});
+
+test('Полночь включает дату, 00:01 исключает её, календарный день переживает DST', () => {
+  const zone = 'America/New_York';
+  const start = Date.parse('2025-03-09T05:00Z'), end = Date.parse('2025-03-10T04:00Z');
+  const calendar = habit('7 RUB\n7 1 500 5 200', start, 'calendar');
+  const full = calculate([range(start)], [calendar], zone, end);
+  assert.equal(full.current, 23 * 3_600_000);
+  assert.equal(full.days, 1);
+  close(full.money.get('RUB'), 20_000);
+  assert.equal(calculate([range(start + 60_000)], [calendar], zone, end).days, 0);
+  assert.equal(calculate([range(start)], [calendar], zone, end - 1).days, 0);
+  assert.equal(calculate([range(start)], [calendar], zone, end, 'UTC').days, 0);
+  const split = timeline({ ms: start - DAY, precision: 'minute' },
+    [{ start: start - DAY / 2, last: start, precision: 'minute' }]);
+  const totals = calculate(split, [calendar], zone, end);
+  assert.equal(totals.days, 1);
+  assert.equal(totals.weekends, 0);
+});
+
+test('Календарный бюджет старой версии имеет приоритет; смена в середине дня не начисляет ни одну цену', () => {
+  const saturday = Date.parse('2025-01-04T00:00Z');
+  const mixed = {
+    effective: saturday, mode: 'calendar', budget: null, currency: 'RUB', period: 7, items: [
+      { drink: 'budget', weekday: 6, portions: 1, ml: null, abv: null, price: 100_000 },
+      { drink: 'beer', weekday: 6, portions: 1, ml: 500, abv: 5, price: 50_000 }
+    ]
+  };
+  const end = saturday + DAY;
+  const full = calculate([range(saturday)], [mixed], 'UTC', end);
+  close(full.money.get('RUB'), 100_000);
+  close(full.drinks.get('["beer",500]'), 1);
+  const next = { ...mixed, effective: saturday + DAY / 2, items: mixed.items.slice(1) };
+  const between = calculate([range(saturday)], [mixed, next], 'UTC', end);
+  assert.equal(between.money.size, 0);
+  close(between.drinks.get('["beer",500]'), 0);
+  assert.equal(between.days, 1);
+  close(calculate([range(saturday)], [mixed, next], 'UTC', end + 7 * DAY).money.get('RUB'), 50_000);
 });

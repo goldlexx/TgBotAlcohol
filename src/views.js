@@ -1,10 +1,10 @@
-import { facts, sources, healthRotation, recoveryMilestones } from '../content/facts.js';
+import { facts, sources, healthRotation } from '../content/facts.js';
 import { ideas, cravings, lifeLabels } from '../content/ideas.js';
 import { awardCatalog } from '../content/achievements.js';
 import { calculate, MILESTONES } from './calculations.js';
-import { drinkName, formatMoney, volume } from './habits.js';
+import { drinkName, formatMoney, hasCalendarBudget, volume } from './habits.js';
 import { DAY, displayTime, observation, today, zoneLabel } from './time.js';
-import { emergency, medicalHold, risk, symptoms, privacy } from './safety.js';
+import { emergency, hasMedicalRisk, risk, symptoms, privacy } from './safety.js';
 
 export const sections = [
   [['📊 Мой прогресс', 'progress'], ['🆘 Хочу выпить', 'craving']],
@@ -44,7 +44,7 @@ export function duration(ms, remaining = false) {
 }
 export function bar(percent) {
   const filled = Math.round(percent / 10);
-  return '█'.repeat(filled) + '░'.repeat(10 - filled) + ' **' + percent + '%**';
+  return '▰'.repeat(filled) + '▱'.repeat(10 - filled) + ' **' + percent + '%**';
 }
 
 export function statsFor(state, now) {
@@ -73,14 +73,14 @@ const drinkUnits = {
 };
 const drinkGenitives = { beer: 'пива', wine: 'вина', sparkling: 'игристого вина', vodka: 'водки',
   whisky: 'виски', brandy: 'коньяка', cocktail: 'коктейля', other: 'другого напитка' };
-const formatVolume = new Intl.NumberFormat('ru', { maximumFractionDigits: 4 });
 function drinkLine(key, amount) {
   const [drink, ml] = JSON.parse(key);
+  const name = drinkGenitives[drink];
+  const forms = drinkUnits[drink]?.[ml] ?? portion.map(word => name ? word + ' ' + name : word);
+  if (amount.lt(1)) return '**Менее одной порции**' + (name ? ' ' + name : '') + ' по ' + volume(ml);
   const count = Math.round(amount.toNumber());
-  const forms = drinkUnits[drink]?.[ml];
   const index = { one: 0, few: 1, many: 2 }[plurals.select(count)] ?? 2;
-  const unit = forms?.[index] ?? portion[index] + ' ' + (drinkGenitives[drink] ?? 'напитка');
-  return '**≈' + number.format(count) + ' ' + unit + '** по ' + formatVolume.format(ml) + ' мл';
+  return '**≈' + number.format(count) + ' ' + forms[index] + '** по ' + volume(ml);
 }
 
 function metricLines(profile, stats, mode) {
@@ -88,11 +88,19 @@ function metricLines(profile, stats, mode) {
   const limit = mode === 'morning' ? 3 : mode === 'progress' ? 16 : Infinity;
   const lines = enabled.money === false ? [] : moneyLines(stats).slice(0, limit);
   if (enabled.drinks !== false && stats.drinks.size) {
-    const drinks = [...stats.drinks].slice(0, limit).map(([key, amount]) => drinkLine(key, amount));
-    const more = stats.drinks.size > limit ? '\nЕщё ' + (stats.drinks.size - limit) + ' в подробной статистике' : '';
-    lines.push('🥤 Не выпито' + partial(stats.partialDrinks) + ':' + (drinks.length > 1 ? '\n' : ' ') + drinks.join('\n') + more);
+    const earned = [...stats.drinks].filter(([, amount]) => amount.gt(0));
+    const drinks = earned.slice(0, limit).map(([key, amount]) => drinkLine(key, amount));
+    const more = earned.length > limit ? '\nЕщё ' + (earned.length - limit) + ' в подробной статистике' : '';
+    if (drinks.length) {
+      lines.push('🥤 Не выпито' + partial(stats.partialDrinks) + ':' + (drinks.length > 1 ? '\n' : ' ') + drinks.join('\n') + more);
+    } else if (mode === 'details') {
+      lines.push('🥤 Невыпитые порции' + partial(stats.partialDrinks) + ' · пока не начислены');
+    }
+    if (mode === 'details' && [...stats.drinks.keys()].some(key => JSON.parse(key)[0] === null)) {
+      lines.push('Уточни название напитка в настройках прежней привычки.');
+    }
   }
-  if (mode !== 'morning' && enabled.days !== false) lines.push('📅 Всего трезвых дней: **' + number.format(stats.days) + '**');
+  if (enabled.days !== false) lines.push('📅 Всего трезвых дней: **' + number.format(stats.days) + '**');
   if (enabled.weekends !== false) lines.push('☀️ Трезвых выходных: **' + number.format(stats.weekends) + '**');
   const show = key => mode === 'details' ? enabled[key] !== false : mode === 'morning' && enabled[key] === true;
   if (show('grams') && stats.grams !== null) lines.push('⚖️ Чистый этанол: **≈' +
@@ -106,14 +114,17 @@ function metricLines(profile, stats, mode) {
 function progressText(state, stats, mode = 'progress') {
   const paused = openEpisode(state);
   const lines = [paused ? '**Серия на паузе**' : series(stats)];
-  if (!paused && (mode === 'progress' || (!state.neutral && !medicalHold(state.profile)))) {
-    if (stats.next) lines.push('🎯 Следующий рубеж — ' + label(stats.next) + '\n\n' + bar(stats.percent) + '\n' + nextText(stats));
+  if (!paused && (mode !== 'onboarding' || !hasMedicalRisk(state))) {
+    if (stats.next) lines.push('🎯 Следующий рубеж — ' + label(stats.next) + '\n' +
+      (stats.earlier ? 'Участок: ' + label(stats.earlier) + ' → ' + label(stats.next) + '\n' : '') +
+      bar(stats.percent) + '\n' + nextText(stats));
     const goal = state.profile.goal;
-    if (goal && !state.neutral && mode !== 'morning') lines.push(stats.current >= goal * DAY ? '🎯 Личная цель достигнута'
+    if (goal && mode !== 'morning') lines.push(stats.current >= goal * DAY ? '🎯 Личная цель достигнута'
       : '🎯 Личная цель — ' + label(goal) + ' · осталось ' + duration(goal * DAY - stats.current, true));
   }
-  lines.push(...metricLines(state.profile, stats, mode === 'morning' ? mode : 'progress'));
-  if (mode !== 'morning') lines.push('🏆 Достижения: **' + stats.awards.length + ' из ' + MILESTONES.length + '**');
+  const metrics = metricLines(state.profile, stats, mode === 'morning' ? mode : 'progress');
+  if (mode !== 'morning') metrics.push('🏆 Достижения: **' + stats.awards.length + ' из ' + MILESTONES.length + '**');
+  if (metrics.length) lines.push(metrics.join('\n'));
   return lines.join('\n\n');
 }
 
@@ -127,18 +138,21 @@ function idea(day, id, group, offset) {
 }
 const offsetFor = (text, length) => (/^\d{1,4}$/.test(text) ? Number(text) : 0) % length;
 
-export function report(state, now, id, milestone, day, afterEpisode = false) {
+export function report(state, now, id, day, { automatic = false, milestone = null, afterEpisode = false } = {}) {
   if (!state.profile) return screen('☀️ **Утренний отчёт**\n\nНачни отслеживание, чтобы увидеть свой отчёт.', [nav('☀️ Начать', 'begin')]);
-  if (openEpisode(state)) return screen('☀️ **Утренний отчёт на паузе**\n\nОтмечен продолжающийся эпизод.', [nav('📅 История', 'history')], ...helpButtons.map(b => [b]));
-  if (medicalHold(state.profile)) return screen('☀️ **Утренний отчёт**\n\n' + progressText(state, statsFor(state, now), 'morning'), ...reportButtons);
-  if (state.profile.privatePush || state.neutral) return screen('Твой отчёт готов', [nav('Открыть статистику', 'progress')]);
-  const stats = statsFor(state, now);
   const p = state.profile;
-  const greeting = afterEpisode ? '☀️ **Твой путь продолжается**' : milestone
-    ? '🏆 **' + awardCatalog[milestone][2] + '**\n\nСегодня новый рубеж.' : '☀️ **Доброе утро!**';
-  const lines = [greeting, progressText(state, stats, 'morning')];
-  if (!afterEpisode && ['fact', 'both'].includes(p.content)) lines.push('🫀 **Факт о здоровье**\n\n' + pick(healthRotation, day, id).text);
-  if (!afterEpisode && ['idea', 'both'].includes(p.content)) lines.push('💡 **Идея дня**\n\n' + idea(day, id));
+  if (automatic && p.privatePush) return screen('Твой отчёт готов', [nav('Открыть отчёт', 'morning')]);
+  const paused = openEpisode(state);
+  const medical = hasMedicalRisk(state) || paused;
+  if (automatic && medical) return screen('Автоматическая отправка на паузе.');
+  const stats = statsFor(state, now);
+  if (!automatic && stats.earlier && today(state.intervals.at(-1).start + stats.earlier * DAY, p.zone) === day) milestone = stats.earlier;
+  const greeting = milestone ? '🏆 **' + awardCatalog[milestone][2] + '**'
+    : afterEpisode ? '☀️ **Твой путь продолжается**' : '☀️ **Доброе утро!**';
+  const lines = [...(medical ? ['⚕️ **Медицинская помощь**\n\n' + risk] : []), greeting, progressText(state, stats, 'morning')];
+  const content = p.content ?? 'both';
+  if (['fact', 'both'].includes(content)) lines.push('🫀 **Факт о здоровье**\n\n' + pick(healthRotation, day, id).text);
+  if (['idea', 'both'].includes(content)) lines.push('💡 **Идея дня**\n\n' + idea(day, id));
   return screen(lines.join('\n\n'), ...reportButtons);
 }
 
@@ -155,10 +169,10 @@ const cause = { work: '💼 После работы', company: '👥 В комп
 const causeTitle = { work: '💼 Вечер после работы', company: '👥 Тяга в компании', stress: '😟 Напряжённый момент', habit: '🔄 Меняем привычный ритуал' };
 const noteEpisode = nav('📝 Отметить эпизод', 'episode');
 const contentNames = { both: 'статистика, факт и идея', fact: 'статистика и факт', idea: 'статистика и идея', numbers: 'только статистика' };
-const recoveryEmoji = { Сон: '😴', Давление: '❤️', Печень: '🫀', Память: '🧠', Внимание: '🧠', Вес: '⚖️', 'Обмен веществ': '🌿', Энергия: '☀️' };
+const cravingSafety = 'Если после паузы или сокращения алкоголя тебе физически плохо, сначала открой медицинскую помощь.';
 
 function cravingStats(state, now) {
-  if (!state.profile || openEpisode(state) || medicalHold(state.profile)) return '';
+  if (!state.profile || openEpisode(state) || hasMedicalRisk(state)) return '';
   const stats = statsFor(state, now);
   return [series(stats), ...moneyLines(stats), '🏆 Наград получено: **' + stats.awards.length + '**'].join('\n');
 }
@@ -166,7 +180,7 @@ function cravingStats(state, now) {
 export function view(route, state, now, id) {
   const [page, arg, other] = route.split('.');
   const p = state.profile;
-  const stats = ['progress', 'details', 'awards', 'recovery'].includes(page) && p ? statsFor(state, now) : null;
+  const stats = ['progress', 'details', 'awards'].includes(page) && p ? statsFor(state, now) : null;
   const day = today(now, p?.zone ?? 'UTC');
   switch (page) {
     case 'menu': return p ? screen('☀️ **Счастье без алкоголя**', ...helpButtons.map(b => [b])) : welcome;
@@ -177,7 +191,7 @@ export function view(route, state, now, id) {
       '\n\nДля оценки сегодня обратись к врачу или в отделение неотложной помощи. Обсудить помощь при зависимости можно с врачом-наркологом.',
       [helpButtons[1]], menuButton), readOnly: true };
     case 'privacy': return screen('🔐 **Мои данные**\n\n' + privacy, [p && offButton(state), nav('Удалить данные', 'delete')].filter(Boolean), back('settings'));
-    case 'morning': return { ...report(state, now, id, null, day), readOnly: true };
+    case 'morning': return { ...report(state, now, id, day, { automatic: arg === 'preview' }), readOnly: true };
     case 'progress': {
       if (!p) return screen('☀️ **Мой прогресс**\n\nНачни отслеживание, чтобы видеть свой прогресс.', [nav('☀️ Начать', 'begin')], helpButtons);
       return screen((arg === 'new' ? '☀️ **Твой путь начался!**' : '☀️ **Мой прогресс**') + '\n\n' + progressText(state, stats, arg === 'new' ? 'onboarding' : 'progress'),
@@ -216,32 +230,34 @@ export function view(route, state, now, id) {
         const ml = rows.every(row => row.ml !== null) ? rows.reduce((n, row) => n + row.portions * row.ml, 0) : null;
         return drinkName(key) + (ml === null ? '' : ' · ' + volume(ml));
       });
-      const costs = h?.items.filter(row => row.price !== null) ?? [];
+      const calendarBudget = h && hasCalendarBudget(h);
+      const costs = h?.items.filter(row => row.price !== null && (!calendarBudget || row.drink === 'budget')) ?? [];
       const period = h?.period === 28 ? ' за 28 дней' : ' за неделю';
       const spend = h?.budget ?? (costs.length ? costs.reduce((n, row) => n + row.portions * row.price, 0) : null);
       return screen([
         '⚙️ **Настройки**\n', '📅 Последнее употребление: ' + date,
         '📊 Прежняя привычка: ' + (summary.length ? summary.slice(0, 4).join(', ') + period + (summary.length > 4 ? ' и другие' : '') : 'напитки не указаны'),
-        '💰 Расходы: ' + (spend === null ? 'не указаны' : '≈' + formatMoney(spend, h.currency, true) + period + (h.budget === null && costs.length < h.items.length ? ' (частично)' : '')),
+        '💰 Расходы: ' + (spend === null ? 'не указаны' : '≈' + formatMoney(spend, h.currency, true) + period +
+          (h.budget === null && !calendarBudget && costs.length < h.items.length ? ' (частично)' : '')),
         '🔔 Утренний отчёт: ' + freq[p.frequency] + (p.frequency === 'off' ? '' : ' в ' + p.clock),
-        '🌍 Часовой пояс: ' + zoneLabel(p.zone, now), '🎯 Цель: ' + (state.neutral ? 'нейтральный режим' : p.goal ? label(p.goal) : 'без ограничений')
+        '🌍 Часовой пояс: ' + zoneLabel(p.zone, now), '🎯 Цель: ' + (p.goal ? label(p.goal) : 'без ограничений')
       ].join('\n'),
-      [nav('📅 Дата и история', 'history'), nav('📊 Прежняя привычка', 'edit.habit')],
-      [nav('💰 Расчёт экономии', 'edit.mode'), nav('🎯 Моя цель', 'edit.goal')],
+      [nav('📅 Дата и история', 'history'), noteEpisode],
+      [nav('📊 Прежняя привычка', 'edit.habit'), nav('💰 Экономия', 'edit.mode')],
+      [nav('🎯 Цель', 'edit.goal'), nav('📊 Показатели прогресса', 'metrics')],
       [nav('🔔 Уведомления', 'notifications'), nav('🌍 Часовой пояс', 'edit.zone')],
-      [nav('📊 Показатели прогресса', 'metrics')],
       [nav('ℹ️ Как считаем', 'method.settings'), nav('🔐 Мои данные', 'privacy')],
-        [noteEpisode], [nav('🆘 Медицинская помощь', 'help')], ...helpButtons.map(b => [b]), back());
+      [nav('🆘 Медицинская помощь', 'help')], back());
     }
     case 'notifications':
       if (!p) return welcome;
       return screen('🔔 **Уведомления**\n\nУтренний отчёт: ' + freq[p.frequency] + (p.frequency === 'off' ? '' : ' в ' + p.clock) +
-        (medicalHold(p) ? '\nАвтоматическая отправка на паузе.' : '') +
-        '\nСодержание: ' + (state.neutral ? 'нейтральное' : contentNames[p.content]) +
-        '\nПревью: ' + (p.privatePush || state.neutral ? 'Твой отчёт готов' : 'обычный отчёт'),
+        (hasMedicalRisk(state) || openEpisode(state) ? '\nАвтоматическая отправка на паузе.' : '') +
+        '\nСодержание: ' + contentNames[p.content ?? 'both'] +
+        '\nПревью: ' + (p.privatePush ? 'Твой отчёт готов' : 'обычный отчёт'),
       [nav(p.frequency === 'off' ? 'Включить отчёты' : 'Частота и время', 'edit.notify')],
-      state.neutral ? [] : [nav('Содержание', 'edit.content'), nav('Формат превью', 'edit.push')],
-      p.frequency === 'off' ? [] : [offButton(state)], [nav('Посмотреть отчёт', 'morning')], back('settings'));
+      [nav('Содержание', 'edit.content'), nav('Формат превью', 'edit.push')],
+      p.frequency === 'off' ? [] : [offButton(state)], [nav('Открыть отчёт', 'morning'), nav('Превью', 'morning.preview')], back('settings'));
     case 'history': {
       if (!p) return welcome;
       const rows = state.episodes.map(e => ({ id: e.id, text: displayTime(e.start, p.historyZone) + ' → ' +
@@ -262,10 +278,11 @@ export function view(route, state, now, id) {
       const awards = stats?.awards ?? [], future = MILESTONES.filter(d => !awards.includes(d));
       const lines = ['🏆 **Твои достижения**', '**' + awards.length + ' из ' + MILESTONES.length + ' наград**',
         bar(Math.round(100 * awards.length / MILESTONES.length)),
+        'Достигнутые рубежи сохраняются после нового эпизода.',
         awards.length ? '✅ **Полученные награды**\n\n' + awards.map(d => awardLine(d)).join('\n') : '',
         future.length ? '🎯 **Впереди**\n\n' + future.map(d => awardLine(d, true)).join('\n') : '🎉 Коллекция собрана!'];
       const nextAward = future[0];
-      if (p && !state.neutral && !openEpisode(state) && nextAward > stats.current / DAY) {
+      if (p && !openEpisode(state) && nextAward > stats.current / DAY) {
         lines.push('🎁 До следующей награды — **' + duration(nextAward * DAY - stats.current, true) + '**');
       }
       return screen(lines.filter(Boolean).join('\n\n'), back());
@@ -279,33 +296,30 @@ export function view(route, state, now, id) {
         'Открывай новые способы отдыхать, общаться и радоваться жизни.\n\n💡 **Идея дня**') + '\n\n' + idea(day, id, category?.[1], offset),
       ...[0, 2, 4, 6].map(i => choices.slice(i, i + 2)), [nav('🔄 Другая идея', 'life.' + (category?.[1] ?? 'all') + '.' + ((offset + 1) % length))], back());
     }
-    case 'craving': return state.neutral || openEpisode(state) ? riskView : screen(['🆘 **Хочется выпить?**', cravingStats(state, now),
-      '**Не нужно принимать решение на всю жизнь. Достаточно не пить сейчас.**',
-      'Если это привычная тяга, попробуй сменить обстановку и отложить решение на несколько минут. Если физически плохо, выбери медицинскую помощь.',
+    case 'craving': return hasMedicalRisk(state) || openEpisode(state) ? riskView : screen(['🆘 **Хочется выпить?**', cravingSafety, cravingStats(state, now),
+      'Если это привычная тяга, попробуй сменить обстановку и отложить решение на несколько минут.',
       'Что вызвало желание выпить?'].filter(Boolean).join('\n\n'),
+      ...helpButtons.map(b => [b]),
       [nav(cause.work, 'crave.work'), nav(cause.company, 'crave.company')], [nav(cause.stress, 'crave.stress'), nav(cause.habit, 'crave.habit')],
-      [nav('✅ Отпустило', 'relief')], [noteEpisode], ...helpButtons.map(b => [b]), back());
+      [nav('✅ Отпустило', 'relief')], [noteEpisode], back());
     case 'crave': {
-      if (state.neutral || openEpisode(state)) return riskView;
+      if (hasMedicalRisk(state) || openEpisode(state)) return riskView;
       if (!Object.hasOwn(cravings, arg)) return view('craving', state, now, id);
       const list = cravings[arg], offset = offsetFor(other, list.length);
-      return screen('**' + causeTitle[arg] + '**\n\n**Попробуй сейчас**\n\n' + pick(list, day, id, offset) +
-        '\n\nЕсли физически плохо, выбери медицинскую помощь.' +
+      return screen('**' + causeTitle[arg] + '**\n\n' + cravingSafety + '\n\n**Попробуй сейчас**\n\n' + pick(list, day, id, offset) +
         (p ? '\n\n☀️ ' + series(statsFor(state, now)) : ''),
-      [nav('✅ Отпустило', 'relief'), nav('💡 Другой совет', 'crave.' + arg + '.' + ((offset + 1) % list.length))],
-      [noteEpisode], helpButtons, back('craving'));
+      ...helpButtons.map(b => [b]), [nav('✅ Отпустило', 'relief'), nav('💡 Другой совет', 'crave.' + arg + '.' + ((offset + 1) % list.length))],
+      [noteEpisode], back('craving'));
     }
-    case 'relief': return state.neutral || openEpisode(state) ? riskView : screen('Ещё одна волна позади. Продолжай в своём темпе. ☀️', back('craving'));
+    case 'relief': return hasMedicalRisk(state) || openEpisode(state) ? riskView : screen('Ещё одна волна позади. Продолжай в своём темпе. ☀️', back('craving'));
     case 'recovery': {
-      const elapsed = (stats?.current ?? 0) / DAY;
-      const current = recoveryMilestones.filter(f => f.days <= elapsed).slice(-2);
-      const next = recoveryMilestones.filter(f => f.days > elapsed).slice(0, 3);
-      const lines = entries => entries.map(f => (recoveryEmoji[f.category] ?? '🌿') + ' **' + f.category + '** — ' + f.text).join('\n');
-      return screen(['🫀 **Восстановление организма**', stats && !openEpisode(state) ? series(stats) : '',
-        '🌱 **На этом этапе**\n\n' + lines(current.length ? current : [facts.find(f => f.id === 'sleep-quality')]),
-        next.length ? '🎯 **Что может измениться дальше**\n\n' + lines(next) : '',
-        'Это ориентиры из исследований. Темпы восстановления индивидуальны.'].filter(Boolean).join('\n\n'),
-      [nav('📅 Все этапы восстановления', 'stages')], [nav('ℹ️ Методика и источники', 'method.recovery')], back());
+      const factText = (...ids) => ids.map(key => facts.find(fact => fact.id === key).text).join('\n');
+      return screen(['🫀 **Восстановление организма**',
+        'Это ориентиры из исследований. Они описывают наблюдения в группах. Темпы восстановления индивидуальны.',
+        '**Первые дни**\n' + factText('sleep'),
+        '**Наблюдения примерно за месяц**\n' + factText('pressure', 'liver'),
+        '**Исследования на протяжении месяцев**\n' + factText('memory', 'attention')].join('\n\n'),
+      [nav('📅 Все наблюдения', 'stages')], [nav('ℹ️ Методика и источники', 'method.recovery')], back());
     }
     case 'stages': {
       const chunk = paginate(facts, arg, 'stages', 4);
@@ -314,7 +328,7 @@ export function view(route, state, now, id) {
     }
     case 'method': return screen('ℹ️ **Как считаем**\n\n💰 Экономия и 🥤 невыпитые порции — оценки по прежней привычке и указанным объёмам.\n⚖️ Чистый этанол — по объёму и крепости напитков.\n🔥 Калории — по энергетической ценности этанола.\n📅 Трезвые дни и выходные — по указанной истории употребления.',
       [nav('📖 Методика расчётов', 'formulas'), nav('🔬 Научные источники', 'sources.method')], back(['progress', 'details', 'settings', 'recovery'].includes(arg) ? arg : 'menu'));
-    case 'formulas': return screen('📖 **Методика расчётов**\n\nСутки серии — 24 часа. Трезвый день — целая местная дата внутри известного периода воздержания. Выходные — полностью завершённые суббота и воскресенье внутри одного такого периода. Если известно только число, отсчёт начинается со следующей полуночи.\n\n**Чистый этанол** = порции × мл × крепость / 100 × 0,789 г по каждому напитку. Энергия этанола = граммы × 7. В эту цифру входит только этанол.\n\n**Пример**\n1 400 ₽ и 7 порций за неделю дают ≈200 ₽ и ≈1 порцию за каждые 24 часа. Так работает среднесуточная оценка. В календарном расчёте засчитываются полные дни по указанному графику. Порции разных видов и объёмов показываются отдельно.\n\nПри смене привычки прежние оценки сохраняются по её прошлой версии. Расходы самого эпизода не вычитаются. При неполных сведениях оценка может быть частичной. Рубежи в годах считаются по 365 суток.',
+    case 'formulas': return screen('📖 **Методика расчётов**\n\nСутки серии — 24 часа. Трезвый день — целая местная дата внутри известного периода воздержания. Выходные — полностью завершённые суббота и воскресенье внутри одного такого периода. Если известно только число, отсчёт начинается со следующей полуночи.\n\n**Чистый этанол** = порции × мл × крепость / 100 × 0,789 г по каждому напитку. Энергия этанола = граммы × 7. В эту цифру входит только этанол.\n\n**Пример**\n1 400 ₽ и 7 порций за неделю дают ≈200 ₽ и ≈1 порцию за каждые 24 часа. В календарном расчёте день засчитывается, если целиком попадает и в период воздержания, и в одну версию привычки. День смены привычки посреди дня пропускается в этой оценке.\n\nЭкономия берётся из общего бюджета или отдельных цен. Расходы самого эпизода не вычитаются. При неполных сведениях оценка может быть частичной. Рубежи в годах считаются по 365 суток.',
       [nav('🔬 Научные источники', 'sources.method')], back('method'));
     case 'sources': {
       const chunk = paginate(Object.values(sources), other, 'sources.' + (arg ?? 'method'), 5);

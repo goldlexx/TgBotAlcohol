@@ -9,13 +9,13 @@ import { DAY } from '../src/time.js';
 import { defaults } from '../src/dialogs.js';
 import { load } from '../src/storage.js';
 import { message } from '../src/telegram.js';
-import { report } from '../src/views.js';
+import { report, statsFor } from '../src/views.js';
 import { today } from '../src/time.js';
 
 const now = Date.parse('2026-03-10T08:00Z');
 const secret = 'local-synthetic-only';
 const idRange = Array.from({ length: 200 }, (_, i) => 800_000 + i);
-const chats = [...Array.from({ length: 30 }, (_, i) => 100 + i), ...idRange];
+const chats = [...Array.from({ length: 40 }, (_, i) => 100 + i), ...idRange];
 const fakeEnv = { WEBHOOK_SECRET: secret, TELEGRAM_TOKEN: 'local-stub', ALLOWED_CHAT_IDS: chats.join(',') };
 let mf, db, seq = 1000;
 const statement = (sql, ...args) => db.prepare(sql).bind(...args);
@@ -144,28 +144,37 @@ test('P0 помощь до регистрации, симптомы и сомн�
     await s.receive('/start');
     await s.press('☀️ Начать');
     assert.match(await s.press(label), /медицинской оценкой сегодня/);
-    assert.match(await s.nav('craving'), /Резкое прекращение/);
-    assert.match(await s.nav('crave.stress'), /медицинской оценкой/);
     const row = await get('SELECT profile,neutral,fsm FROM users WHERE id=?', id);
     assert.equal(row.profile, null);
-    assert.equal(row.neutral, 1);
-    assert.ok(!/urgent|symptom|initial|reason/.test(row.fsm));
+    assert.equal(row.neutral, Number(label === 'Есть симптомы'));
+    assert.ok(!/urgent|symptom|initial|reason|unsure/.test(row.fsm));
+    if (row.neutral) {
+      assert.match(await s.nav('craving'), /Резкое прекращение/);
+      assert.match(await s.nav('crave.stress'), /медицинской оценкой/);
+    }
   }
   const s = session(103);
   await s.receive('/start');
   await s.press('☀️ Начать');
   await s.press('Симптомов сейчас нет');
-  assert.match(await s.press('Да / Не знаю'), /врачом заранее/);
-  await s.press('Есть профессиональная помощь · нейтральный режим');
+  assert.match(await s.press('Да'), /врачом заранее/);
+  await s.press('Записать дату');
   await s.press(/^Москва /);
-  assert.doesNotMatch(await s.press('Сейчас'), /Цель|█/);
+  assert.doesNotMatch(await s.press('Сейчас'), /Цель|▰|▱/);
   assert.equal(s.messages().length, 1);
 });
 
 test('Регистрация, /start без сброса, контент, цель, часовой пояс и выключение уведомлений', async () => {
   const s = session(104);
   assert.match(await onboard(s, { notifications: true, habit: true }), /9 дней 1 час/);
-  assert.match(await s.receive('/start'), /Мой прогресс/);
+  await s.receive('/start');
+  const [menu, progress] = s.messages();
+  assert.equal(s.messages().length, 2);
+  assert.equal(menu.reply_markup.keyboard.flat().length, 6);
+  assert.equal(menu.reply_markup.inline_keyboard, undefined);
+  assert.match(progress.text, /Мой прогресс/);
+  assert.deepEqual(progress.reply_markup.inline_keyboard.flat().map(button => button.callback_data).sort(),
+    ['n:details', 'n:episode', 'n:history', 'n:method.progress']);
   assert.match(await s.nav('progress'), /1[\s\u00a0]808/);
   assert.match(await s.nav('life'), /Жизнь без алкоголя/);
   assert.match(await s.press('🔄 Другая идея'), /Жизнь без алкоголя/);
@@ -187,7 +196,7 @@ test('Регистрация, /start без сброса, контент, цел
 test('Медицинские экраны сохраняют профиль и доставку, старый флаг ограничивает только рассылку', async () => {
   const id = 113;
   await seed([id], { trackingPaused: true, goal: 14 });
-  await statement('UPDATE users SET neutral=1 WHERE id=?', id).run();
+  await statement('UPDATE users SET neutral=1,fsm=? WHERE id=?', '{"step":"habit.home","token":"legacy-fsm"}', id).run();
   const s = session(id);
   const before = await load(db, id);
   const job = await get('SELECT * FROM delivery_jobs WHERE user_id=?', id);
@@ -197,14 +206,17 @@ test('Медицинские экраны сохраняют профиль и �
     assert.match(await s.press('🚑 Экстренная помощь'), /112 или 103.*местному экстренному номеру/);
     assert.match(await s.press('Главное меню'), /Счастье без алкоголя/);
   }
-  assert.match(await s.receive('/start'), /9 дней 0 часов без алкоголя|9 дней без алкоголя/);
+  await s.receive('/start');
+  assert.match(s.messages()[1].text, /9 дней без алкоголя/);
   assert.match(await s.nav('progress'), /Достижения.*3 из 12/);
   assert.match(await s.press('📊 Подробная статистика'), /Самая длинная серия/);
   assert.match(await s.nav('history'), /Начало отслеживания/);
   assert.match(await s.nav('settings'), /Последнее употребление/);
   assert.match(await s.nav('awards'), /3 из 12/);
   assert.match(await s.nav('craving'), /Резкое прекращение/);
-  assert.doesNotMatch(await s.receive('/morning'), /Факт о здоровье|Идея дня/);
+  const manual = await s.receive('/morning');
+  assert.match(manual, /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
+  assert.match(manual, /Резкое прекращение/);
   const after = await load(db, id);
   assert.deepEqual(after.profile, before.profile);
   assert.deepEqual(after.intervals, before.intervals);
@@ -213,7 +225,13 @@ test('Медицинские экраны сохраняют профиль и �
   let sent = 0;
   await tick({ ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id) }, now, async () => sent++);
   assert.equal(sent, 0);
-  await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
+  assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), null);
+  const stored = JSON.parse((await get('SELECT profile FROM users WHERE id=?', id)).profile);
+  assert.equal(stored.trackingPaused, undefined);
+  assert.equal(stored.medicalHold, true);
+  await s.nav('edit.push');
+  await s.press('Обычный отчёт');
+  assert.deepEqual(JSON.parse((await get('SELECT profile FROM users WHERE id=?', id)).profile), stored);
 });
 
 test('Эпизод: пауза, повторная проверка безопасности, новая серия, коррекция и удаление', async () => {
@@ -332,8 +350,8 @@ test('Пошаговая статистика: пресеты, ручной вв
     ['beer',12,1000,5,50000], ['brandy',2,150,null,2000]
   ]);
   const progress = await s.nav('progress');
-  assert.match(progress, /порци[яий]+ пива<\/b> по 1\s000 мл/);
-  assert.match(progress, /коньяка<\/b> по 150 мл/);
+  assert.match(progress, /порци[яий]+ пива<\/b> по 1 л/);
+  assert.match(progress, /Менее одной порции<\/b> коньяка по 150 мл/);
   assert.doesNotMatch(progress, /этанол|ккал|бутылок/);
   assert.match(await s.press('📊 Подробная статистика'), /Чистый этанол:.*частично/);
   await s.nav('edit.habit');
@@ -387,7 +405,7 @@ test('/morning использует общий генератор и не мен
   await seed([112], { content: 'both' });
   const s = session(112), before = await get('SELECT * FROM delivery_jobs WHERE user_id=112');
   const progress = await load(db, 112);
-  const expected = message(112, report(progress, now, 112, null, today(now, 'UTC')));
+  const expected = message(112, report(progress, now, 112, today(now, 'UTC')));
   assert.equal(await s.receive('/morning'), expected.text);
   assert.equal(s.messages()[0].parse_mode, 'HTML');
   assert.deepEqual(await get('SELECT * FROM delivery_jobs WHERE user_id=112'), before);
@@ -402,7 +420,8 @@ test('/morning использует общий генератор и не мен
   }
   await s.nav('edit.push');
   await s.press('Нейтральное сообщение');
-  assert.equal(await s.receive('/morning'), 'Твой отчёт готов');
+  assert.match(await s.receive('/morning'), /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
+  assert.equal(await s.nav('morning.preview'), 'Твой отчёт готов');
   await s.nav('notifications');
   await s.press('Отключить уведомления');
 });
@@ -419,7 +438,9 @@ test('Показатели сохраняются и применяются в �
   assert.match(progress, /Всего трезвых дней/);
   assert.doesNotMatch(progress, /этанол|ккал/);
   assert.match(await s.nav('details'), /Дефицит калорий и снижение веса по ней не определяются/);
-  assert.doesNotMatch(await s.receive('/morning'), /этанол|ккал|Всего трезвых дней/);
+  const morning = await s.receive('/morning');
+  assert.doesNotMatch(morning, /этанол|ккал/);
+  assert.match(morning, /Всего трезвых дней/);
   await s.nav('settings');
   await s.press('📊 Показатели прогресса');
   await s.press('Экономия · вкл.');
@@ -436,6 +457,167 @@ test('Показатели сохраняются и применяются в �
   assert.match(await s.receive('/morning'), /Чистый этанол/);
   assert.doesNotMatch(await s.receive('/morning'), /ккал/);
   assert.deepEqual((await load(db, id)).profile.base, profile.base);
+});
+
+test('Медицинские экраны сохраняют черновик, переход в раздел или команда его закрывают', async () => {
+  const id = 115, s = session(id);
+  await onboard(s);
+  for (const destination of ['📊 Мой прогресс', '/morning', '/privacy', '/start']) {
+    await s.nav('edit.habit');
+    const old = s.findButton('📊 Настроить полную статистику');
+    const before = (await load(db, id)).fsm;
+    await s.nav('emergency');
+    assert.deepEqual((await load(db, id)).fsm, before);
+    await s.receive(destination);
+    assert.deepEqual((await load(db, id)).fsm, {});
+    assert.match(await s.receive({ callback: old }), /устарела/);
+  }
+  await s.nav('edit.habit');
+  const old = s.findButton('📊 Настроить полную статистику');
+  await s.receive('/delete');
+  assert.equal((await load(db, id)).fsm.step, 'delete');
+  assert.match(await s.receive({ callback: old }), /устарела/);
+  await s.receive('⚙️ Настройки');
+  assert.deepEqual((await load(db, id)).fsm, {});
+  assert.equal((await load(db, id)).habits.length, 0);
+});
+
+test('Приватное превью обратимо и не снимает медицинское ограничение или выключенную подписку', async () => {
+  const id = 116, s = session(id);
+  await seed([id], { frequency: 'off', privatePush: true, medicalHold: true });
+  const state = await load(db, id);
+  const explicit = await s.receive('/morning');
+  assert.match(explicit, /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
+  assert.equal(await s.nav('morning.preview'), 'Твой отчёт готов');
+  const push = report(state, now, id, today(now, 'UTC'), { automatic: true });
+  assert.equal(push.text, 'Твой отчёт готов');
+  assert.equal(push.buttons[0][0].callback_data, 'n:morning');
+  await s.nav('edit.push');
+  await s.press('Обычный отчёт');
+  assert.equal(await s.nav('morning.preview'), 'Автоматическая отправка на паузе.');
+  assert.match(await s.nav('craving'), /Резкое прекращение/);
+  assert.deepEqual((await load(db, id)).profile, { ...state.profile, privatePush: false });
+  assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), null);
+  await s.nav('edit.push');
+  await s.press('Нейтральное сообщение');
+  assert.deepEqual((await load(db, id)).profile, state.profile);
+  assert.equal(await s.nav('morning.preview'), 'Твой отчёт готов');
+  assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), null);
+});
+
+test('Старый профиль без медицинской паузы сохраняет расписание и чеки при повторной нормализации', async () => {
+  const id = 136, s = session(id);
+  await seed([id], { trackingPaused: false, privatePush: true });
+  await statement("INSERT INTO delivery_receipts VALUES (?,'2026-03-09','sent',1,0,7)", id).run();
+  const before = await load(db, id);
+  const job = await get('SELECT * FROM delivery_jobs WHERE user_id=?', id);
+  const receipt = await get('SELECT * FROM delivery_receipts WHERE user_id=?', id);
+  assert.equal(await s.nav('morning.preview'), 'Твой отчёт готов');
+  const oldProfile = JSON.parse((await get('SELECT profile FROM users WHERE id=?', id)).profile);
+  assert.equal(oldProfile.trackingPaused, false);
+  await s.nav('metric.money');
+  await s.nav('metric.money');
+  const after = await load(db, id);
+  assert.deepEqual(after.profile, { ...before.profile, metrics: { money: true } });
+  assert.equal(after.profile.medicalHold, false);
+  assert.deepEqual(after.intervals, before.intervals);
+  assert.deepEqual(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), job);
+  assert.deepEqual(await get('SELECT * FROM delivery_receipts WHERE user_id=?', id), receipt);
+  await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
+});
+
+test('Форматы даты, времени и суммы, возврат из бюджета и точная календарная экономия', async () => {
+  const id = 117, s = session(id);
+  await s.receive('/start');
+  await s.press('☀️ Начать');
+  await s.press('Симптомов сейчас нет');
+  await s.press('Нет');
+  await s.press(/^Москва /);
+  await s.press('Указать дату и время');
+  assert.match(await s.receive('31.2.2026'), /Проверь формат/);
+  assert.match(await s.receive('1.3.2026'), /01\.03\.2026/);
+  assert.match(await s.receive('24:00'), /Проверь формат/);
+  assert.match(await s.receive('7:00'), /Твой путь начался/);
+  assert.equal((await load(db, id)).profile.base.ms, Date.parse('2026-03-01T04:00Z'));
+  await s.nav('edit.habit');
+  await s.press('💰 Считать только деньги');
+  await s.press('За привычный день');
+  await s.receive('1 400 рублей');
+  assert.match(await s.press('Назад'), /Введи примерную сумму/);
+  await s.nav('edit.mode');
+  await s.press('Календарный');
+  await s.press('💰 Считать только деньги');
+  await s.press('За привычный день');
+  assert.match(await s.receive('1000 EUR'), /Проверь формат/);
+  await s.receive('1 000 руб.');
+  await s.press('Сб');
+  await s.press('Готово');
+  await s.press('➕ Добавить другой напиток');
+  await s.press('Пиво');
+  await s.press('Сб');
+  await s.press('Готово');
+  await s.press('500 мл');
+  assert.match(await s.press('5%'), /заменит общий бюджет/);
+  await s.receive('500,50 руб');
+  await s.press('✅ Сохранить');
+  const state = await load(db, id);
+  assert.deepEqual(state.habits[0].items.map(item => [item.drink, item.price]), [['beer', 50_050]]);
+  assert.equal(statsFor(state, now).money.get('RUB').toNumber(), 50_050);
+});
+
+test('Отмена исторического исправления сохраняет версии и следующий ввод создаёт новую', async () => {
+  const id = 118, s = session(id);
+  await onboard(s, { habit: true });
+  const budget = async amount => {
+    await s.nav('edit.habit');
+    await s.press('💰 Считать только деньги');
+    await s.press('За неделю');
+    await s.receive(amount);
+    await s.press('✅ Сохранить');
+  };
+  await budget('1 750 ₽');
+  const before = (await load(db, id)).habits;
+  await s.nav('habitfix.' + before[0].effective);
+  assert.match(await s.press('Назад'), /История прежних привычек/);
+  assert.deepEqual((await load(db, id)).habits, before);
+  await budget('2 100');
+  const after = await load(db, id);
+  assert.deepEqual(after.habits.slice(0, 2), before);
+  const [first, second, third] = after.habits;
+  assert.deepEqual([first.budget, second.budget, third.budget], [140_000, 175_000, 210_000]);
+  assert.ok(first.effective < second.effective && second.effective < third.effective);
+  const expected = (second.effective - first.effective) / DAY * 20_000 +
+    (third.effective - second.effective) / DAY * 25_000 + 30_000;
+  assert.ok(Math.abs(statsFor(after, third.effective + DAY).money.get('RUB').toNumber() - expected) < 0.000001);
+});
+
+test('Повторное исправление завершённого эпизода переносит обе даты раньше и пересчитывает награды', async () => {
+  const id = 119, s = session(id);
+  await onboard(s);
+  await s.nav('episode');
+  await s.press('Употребление завершилось');
+  await s.press('Указать дату и время');
+  await s.receive('9.3.2026 7:00');
+  await s.press('Одиночный эпизод');
+  await s.press('Симптомов сейчас нет');
+  await s.press('Нет');
+  await s.press('Подтвердить');
+  const initial = await load(db, id);
+  const [episode] = initial.episodes;
+  assert.deepEqual(statsFor(initial, now).awards, [1, 3, 7]);
+  await s.nav('correct.' + episode.id);
+  await s.press('Указать дату и время');
+  await s.receive('6.3.2026 20:00');
+  await s.press('Одиночный эпизод');
+  await s.press('Изменить');
+  await s.press('Указать дату и время');
+  await s.receive('4.3.2026 20:00');
+  await s.press('Одиночный эпизод');
+  await s.press('Подтвердить');
+  const after = await load(db, id), ms = Date.parse('2026-03-04T20:00Z');
+  assert.deepEqual(after.episodes, [{ ...episode, start: ms, last: ms }]);
+  assert.equal(after.intervals[0].end, ms);
+  assert.deepEqual((await statement('SELECT days FROM achievements WHERE user_id=? ORDER BY days', id).all()).results.map(row => row.days), [1, 3]);
 });
 
 async function seed(ids, options = {}) {
@@ -499,6 +681,50 @@ test('Рубежи отправляются по одному, при паузе
   assert.equal(messages.length, 1);
   assert.match(messages[0].text, /Целая неделя без алкоголя/);
   assert.equal((await get('SELECT slot FROM delivery_jobs WHERE user_id=127')).slot, now + 5 * DAY);
+});
+
+test('Ручное поздравление и первый рубеж после эпизода сохраняют точные чеки без дублей', async () => {
+  const id = 130, episodeId = 5100;
+  await seed([id], { frequency: 'milestones' });
+  await db.batch([
+    statement("UPDATE abstinence_intervals SET end=? WHERE user_id=?", now - 2 * DAY, id),
+    statement("INSERT INTO abstinence_intervals VALUES (?,?,NULL,'minute')", id, now - DAY),
+    statement("INSERT INTO episodes VALUES (?,?,?,?,'minute')", episodeId, id, now - 2 * DAY, now - DAY)
+  ]);
+  const s = session(id);
+  const startJob = await get('SELECT * FROM delivery_jobs WHERE user_id=?', id);
+  assert.match(await s.receive('/morning'), /Первые сутки позади[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
+  assert.deepEqual(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), startJob);
+  assert.equal(await get('SELECT * FROM delivery_receipts WHERE user_id=?', id), null);
+  const sent = [], api = async (_, __, body) => sent.push(body);
+  const closed = { ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id) };
+  await Promise.all([tick(closed, now, api), tick(closed, now, api)]);
+  await tick(closed, now + 60_000, api);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /Первые сутки позади/);
+  assert.doesNotMatch(sent[0].text, /Твой путь продолжается/);
+  assert.deepEqual((await statement('SELECT * FROM delivery_receipts WHERE user_id=?', id).all()).results, [
+    { user_id: id, local_day: today(now, 'UTC'), status: 'sent', attempts: 1, series: episodeId, milestone: 1 }
+  ]);
+  assert.equal((await get('SELECT slot FROM delivery_jobs WHERE user_id=?', id)).slot, now + 2 * DAY);
+});
+
+test('Cron освобождает пачку от недействительных заданий и сохраняет будущие задания', async () => {
+  await seed([131], { frequency: 'off' });
+  await seed([132], { trackingPaused: true });
+  await seed([133, 134, 135]);
+  await db.batch([
+    statement('UPDATE abstinence_intervals SET end=? WHERE user_id=133', now - DAY),
+    statement('INSERT INTO episodes VALUES (?,?,?,NULL,NULL)', 5101, 133, now - DAY),
+    statement('UPDATE users SET profile=NULL WHERE id=134'),
+    statement('UPDATE delivery_jobs SET next_due_at=?,slot=? WHERE user_id=135', now + DAY, now + DAY)
+  ]);
+  const sent = [];
+  await tick(env(), now, async (_, __, body) => sent.push(body.chat_id));
+  assert.deepEqual(sent.filter(id => id >= 131 && id <= 135), []);
+  const remaining = (await statement('SELECT user_id,slot FROM delivery_jobs WHERE user_id BETWEEN 131 AND 135').all()).results;
+  assert.deepEqual(remaining, [{ user_id: 135, slot: now + DAY }]);
+  assert.equal(await get('SELECT * FROM delivery_receipts WHERE user_id BETWEEN 131 AND 135'), null);
 });
 
 test('200 синтетических профилей, общий слот, конкурирующий Cron и параллельные обновления', async t => {

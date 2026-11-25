@@ -34,6 +34,7 @@ export function parseDate(value, zone, now, precision) {
 }
 
 export const validClock = value => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value);
+export const clockInput = raw => raw.replace(/^\d(?=:)/, '0$&');
 export const displayDay = iso => iso.split('-').reverse().join('.');
 export const displayTime = (ms, zone) => displayDay(today(ms, zone)) + ', ' + local(ms, zone).toPlainTime().toString({ smallestUnit: 'minute' });
 export const observation = (date, zone) => date.precision === 'day'
@@ -68,11 +69,14 @@ export function zoneLabel(zone, now) {
   return new Intl.DateTimeFormat('ru', { timeZone: zone, timeZoneName: 'longGeneric' }).formatToParts(now)
     .find(part => part.type === 'timeZoneName')?.value ?? zoneOffset(zone, now);
 }
-export const dateInput = raw => raw.replace(/^(\d\d)\.(\d\d)\.(\d{4})\b/, '$3-$2-$1');
+export const dateInput = raw => raw
+  .replace(/^(\d{1,2})\.(\d{1,2})\.(\d{4})\b/, (_, day, month, year) =>
+    year + '-' + month.padStart(2, '0') + '-' + day.padStart(2, '0'))
+  .replace(/^(\d{4}-\d\d-\d\d) (\d:\d\d)(?= |$)/, '$1 0$2');
 
-export function completeDates(start, end, zone, excludeStart = false) {
+export function completeDates(start, end, zone) {
   let first = localDay(start, zone);
-  if (excludeStart || midnight(first, zone) < start) first = first.add({ days: 1 });
+  if (midnight(first, zone) < start) first = first.add({ days: 1 });
   const count = Math.max(0, first.until(localDay(end, zone)).days);
   return { first, count };
 }
