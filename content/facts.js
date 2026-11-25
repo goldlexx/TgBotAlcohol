@@ -38,23 +38,23 @@ const populations = {
 
 const established = [
   ['sleep', 'nhs', null, 'Сон', 'При отмене алкоголя возможны трудности со сном. Если появились симптомы отмены, нужна медицинская оценка.'],
-  ['sleep-quality', 'energySurvey', null, 'Качество сна', 'Участники «Сухого января» в опросе в среднем выше оценивали свой сон к концу месяца.'],
-  ['energy', 'energySurvey', null, 'Энергия', 'В опросе «Сухого января» часть участников сообщала, что чувствовала больше энергии.'],
-  ['pressure', 'mehta', 30, 'Давление', 'У взрослых без зависимости, выбравших месячный перерыв, давление снизилось в среднем по группе.'],
-  ['liver', 'mehta', 30, 'Печень', 'После месяца перерыва у группы взрослых без зависимости снизились показатели некоторых печёночных ферментов.'],
-  ['metabolism', 'mehta', 30, 'Обмен веществ', 'У взрослых без зависимости после месяца перерыва организм в среднем лучше реагировал на инсулин.'],
-  ['weight', 'mehta', 30, 'Вес', 'Вес немного снизился в среднем у группы взрослых без зависимости, выбравших месячный перерыв.'],
-  ['wellbeing', 'january', null, 'Настроение', 'В британской наблюдательной работе участники «Сухого января» в среднем лучше оценивали своё психологическое самочувствие после месяца.'],
+  ['sleep-quality', 'energySurvey', null, 'Сон', 'К концу «Сухого января» участники опроса в среднем лучше оценивали свой сон.'],
+  ['energy', 'energySurvey', null, 'Энергия', 'К концу «Сухого января» участники опроса в среднем отмечали больше энергии.'],
+  ['pressure', 'mehta', 30, 'Давление', 'После месяца без алкоголя у участников исследования в среднем снизилось давление.'],
+  ['liver', 'mehta', 30, 'Печень', 'После месяца без алкоголя у участников улучшились показатели печени в анализах крови.'],
+  ['metabolism', 'mehta', 30, 'Обмен веществ', 'После месяца без алкоголя анализы показали, что организм участников в среднем лучше реагировал на инсулин.'],
+  ['weight', 'mehta', 30, 'Вес', 'После месяца без алкоголя вес участников исследования в среднем немного снизился.'],
+  ['wellbeing', 'january', null, 'Самочувствие', 'К концу «Сухого января» участники исследования в среднем лучше оценивали своё самочувствие.'],
   ['activity', 'parr', null, 'Физическая активность', 'В небольшом эксперименте высокая доза алкоголя после тренировки замедляла синтез мышечного белка.'],
-  ['sexual', 'karunakaran', null, 'Сексуальное здоровье', 'У части мужчин с алкогольным расстройством и эректильной дисфункцией в клиническом наблюдении после перерыва улучшилась эректильная функция.'],
+  ['sexual', 'karunakaran', null, 'Сексуальное здоровье', 'Через три месяца без алкоголя большинство мужчин, которых наблюдали в клинике по поводу проблем с эрекцией, сообщили об улучшении.'],
   ['appearance', 'facial', null, 'Внешность', 'В одном опросе женщин высокое употребление алкоголя было связано с более выраженной отёчностью под глазами.'],
-  ['memory', 'powell', null, 'Память', 'В исследованиях взрослых с алкогольной зависимостью показатели некоторых видов памяти улучшались в течение месяцев.'],
-  ['attention', 'powell', null, 'Внимание', 'В исследованиях взрослых с алкогольной зависимостью некоторые показатели внимания улучшались в течение месяцев.'],
+  ['memory', 'powell', null, 'Память', 'В исследованиях взрослых с алкогольной зависимостью результаты тестов памяти улучшались в течение месяцев без алкоголя. Срок зависел от задания.'],
+  ['attention', 'powell', null, 'Внимание', 'В исследованиях взрослых с алкогольной зависимостью результаты заданий на внимание улучшались в течение месяцев без алкоголя.'],
   ['mouth', 'iarc', null, 'Полость рта', 'По оценке IARC, отказ от алкоголя или уменьшение употребления снижает долгосрочный риск рака полости рта.'],
   ['esophagus', 'iarc', null, 'Пищевод', 'По оценке IARC, отказ от алкоголя или уменьшение употребления снижает долгосрочный риск рака пищевода.']
 ].map(([id, source_id, days, category, text]) => ({
   id, source_id, days, category, text, population: populations[source_id][0],
-  limitations: populations[source_id][1], text_version: 2, checked_at: '2026-11-24', clinical_status: 'pending'
+  limitations: populations[source_id][1], text_version: 3, checked_at: '2026-11-24', clinical_status: 'pending'
 }));
 
 const preliminary = [
@@ -93,9 +93,16 @@ const preliminary = [
   checked_at: '2026-11-25', clinical_status: 'pending', previewOnly: true
 }));
 
-export const facts = [...established, ...preliminary];
-export const recoveryMilestones = established.filter(fact => fact.days !== null).sort((a, b) => a.days - b.days);
-export const healthRotation = [
-  'sleep', 'pressure', 'activity', 'sexual', 'liver', 'energy', 'memory', 'metabolism', 'appearance',
-  'sleep-quality', 'wellbeing', 'mouth', 'attention', 'weight', 'esophagus'
-].map(id => established.find(fact => fact.id === id)).concat(preliminary);
+const recoveryTopics = {
+  'sleep-quality': '😴', energy: '☀️', wellbeing: '🌿', pressure: '❤️', liver: '🫀',
+  metabolism: '⚡', weight: '⚖️', memory: '🧠', attention: '🎯', sexual: '🌱'
+};
+const generalTopics = new Set(['activity', 'appearance', 'new-memory', 'coordination', 'help-access']);
+export const facts = [...established, ...preliminary].map(fact => ({
+  ...fact,
+  section: Object.hasOwn(recoveryTopics, fact.id) ? 'recovery' : generalTopics.has(fact.id) ? 'health' : 'risk',
+  icon: recoveryTopics[fact.id]
+}));
+const visible = fact => !fact.previewOnly || fact.clinical_status === 'approved';
+export const recoveryFacts = Object.keys(recoveryTopics).map(id => facts.find(fact => fact.id === id)).filter(visible);
+export const healthRotation = facts.filter(fact => fact.section !== 'risk' && visible(fact));

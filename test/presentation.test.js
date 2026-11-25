@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ideas, cravings, lifeLabels } from '../content/ideas.js';
-import { facts, healthRotation } from '../content/facts.js';
+import { facts, healthRotation, recoveryFacts } from '../content/facts.js';
 import { awardCatalog } from '../content/achievements.js';
 import { DAY } from '../src/time.js';
 import { renderHtml } from '../src/telegram.js';
@@ -26,7 +26,7 @@ test('Достижения на одном экране, разные назва
 });
 
 test('Все подборки проходят полный цикл без смены категории и соседних повторов', () => {
-  assert.deepEqual(new Set(healthRotation.map(row => row.id)), new Set(facts.map(row => row.id)));
+  assert.deepEqual(new Set(facts.map(row => row.section)), new Set(['recovery', 'health', 'risk']));
   for (const [, group] of lifeLabels) {
     const expected = new Set(ideas.filter(row => row.category === group).map(row => row.text));
     let route = 'life.' + group;
@@ -57,7 +57,7 @@ test('Все подборки проходят полный цикл без см
 
 test('Текст и клавиатуры отделяют медицинскую помощь от статистики и советов', () => {
   const recovery = view('recovery', state, now, 1).text;
-  assert.match(recovery, /наблюдения в группах/);
+  assert.match(recovery, /группы людей/);
   assert.match(recovery, /😴 \*\*Сон\*\*[\s\S]+❤️ \*\*Давление\*\*[\s\S]+🧠 \*\*Память\*\*/);
   assert.doesNotMatch(recovery, /На этом этапе|Что может измениться дальше|180 дней/);
   const craving = view('craving', state, now, 1);
@@ -94,7 +94,7 @@ test('Ручной отчёт поздравляет в местную дату 
   assert.doesNotMatch(view('morning', sample, end + DAY, 1).text, new RegExp(awardCatalog[30][2]));
 });
 
-test('Расширенная ротация проходит весь набор до повторов и отделяет непроверенные факты', () => {
+test('Ротация проходит доступный набор до повторов; риски и черновики отделены', () => {
   assert.equal(facts.length, 45);
   assert.equal(ideas.length, 200);
   const sample = { ...state, closedTest: true, profile: { ...state.profile, content: 'both' } };
@@ -104,12 +104,43 @@ test('Расширенная ротация проходит весь набор
     assert.equal(report(sample, ms, 1, day).text, rendered);
     assert.doesNotMatch(report(sample, ms, 1, day, { automatic: true }).text, /Предварительный материал/);
     const [, fact, idea] = /Факт о здоровье\*\*\n\n([^\n]+)[\s\S]*Идея дня\*\*\n\n([^\n]+)/.exec(rendered);
-    return [fact, idea, rendered];
+    assert.doesNotMatch(rendered, /Предварительный материал|https?:\/\//);
+    return [fact, idea];
   });
-  assert.ok(reportDays.some(row => row[2].includes('Предварительный материал')));
-  for (const horizon of [30, 90, 180, 365]) for (const [index, length] of [[0, 45], [1, 200]]) {
+  assert.ok(healthRotation.every(fact => !fact.previewOnly && fact.section !== 'risk'));
+  for (const horizon of [30, 90, 180, 365]) for (const [index, length] of [[0, healthRotation.length], [1, 200]]) {
     assert.equal(new Set(reportDays.slice(0, horizon).map(row => row[index])).size, Math.min(horizon, length));
     assert.equal(new Set(reportDays.slice(0, length).map(row => row[index])).size, length);
+  }
+});
+
+test('Все страницы восстановления показывают только наблюдения о восстановлении, источники открываются кнопками', () => {
+  const sample = { ...state, closedTest: true };
+  const text = [0, 1, 2, 99].map(page => view('stages.' + page, sample, now, 1).text).join('\n');
+  for (const fact of recoveryFacts) assert.ok(text.includes(fact.text), fact.id);
+  for (const fact of facts.filter(entry => entry.section !== 'recovery')) assert.ok(!text.includes(fact.text), fact.id);
+  assert.doesNotMatch(text, /Предварительный материал|https?:\/\//);
+  const sources = view('sources.recovery', sample, now, 1);
+  assert.doesNotMatch(sources.text, /https?:\/\//);
+  assert.ok(sources.buttons.flat().some(button => button.url?.startsWith('https://')));
+});
+
+test('Пиво без данных об упаковке, крепкие напитки и склонение бокалов едины на трёх экранах', () => {
+  const display = (drink, ml, count) => {
+    const from = now - 7 * DAY;
+    const sample = { ...state, profile: { ...state.profile, content: 'numbers' },
+      intervals: [{ start: from, end: null, precision: 'minute' }],
+      habits: [{ effective: from, mode: 'average', period: 7, budget: null, currency: 'RUB',
+        items: [{ drink, ml, portions: count, abv: 5, price: null }] }] };
+    return ['progress', 'details', 'morning'].map(route => view(route, sample, now, 1).text);
+  };
+  for (const text of display('beer', 500, 10)) {
+    assert.match(text, /≈5 л пива/);
+    assert.doesNotMatch(text, /бутыл|порций пива/);
+  }
+  for (const text of display('whisky', 50, 30)) assert.match(text, /≈1,5 л виски/);
+  for (const [count, unit] of [[1, 'бокал'], [2, 'бокала'], [6, 'бокалов'], [11, 'бокалов'], [21, 'бокал']]) {
+    for (const text of display('wine', 150, count)) assert.ok(text.includes(`≈${count} ${unit} вина`));
   }
 });
 

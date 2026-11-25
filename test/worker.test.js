@@ -180,7 +180,8 @@ test('Регистрация, /start без сброса, контент, цел
   assert.match(await s.press('🔄 Другая идея'), /Жизнь без алкоголя/);
   assert.match(await s.nav('recovery'), /ориентиры/);
   await s.press('ℹ️ Методика и источники');
-  assert.match(await s.press('🔬 Научные источники'), /NIAAA/);
+  assert.match(await s.press('🔬 Научные источники'), /Выбери публикацию/);
+  assert.ok(s.messages()[0].reply_markup.inline_keyboard.flat().some(button => button.url?.startsWith('https://')));
   assert.match(await s.nav('awards'), /3 из 12/);
   await s.nav('edit.zone');
   await s.press(/^Москва /);
@@ -349,8 +350,8 @@ test('Пошаговая статистика: пресеты, ручной вв
     ['beer',12,1000,5,50000], ['brandy',2,150,null,2000]
   ]);
   const progress = await s.nav('progress');
-  assert.match(progress, /порци[яий]+ пива<\/b> по 1 л/);
-  assert.match(progress, /Менее одной порции<\/b> коньяка по 150 мл/);
+  assert.match(progress, /л пива<\/b>/);
+  assert.match(progress, /мл коньяка<\/b>/);
   assert.doesNotMatch(progress, /этанол|ккал|бутылок/);
   assert.match(await s.press('📊 Подробная статистика'), /Чистый этанол:.*частично/);
   await s.nav('edit.habit');
@@ -432,7 +433,7 @@ test('Показатели сохраняются и применяются в �
   await statement("INSERT INTO habit_items VALUES (?,?,0,NULL,7,500,5,NULL)", id, profile.base.ms).run();
   await statement("INSERT INTO habit_drinks VALUES (?,?,0,'beer')", id, profile.base.ms).run();
   const progress = await s.nav('progress');
-  assert.match(progress, /порций пива<\/b> по 500 мл/);
+  assert.match(progress, /л пива<\/b>/);
   assert.match(progress, /Трезвых выходных.*1/);
   assert.match(progress, /Всего трезвых дней/);
   assert.doesNotMatch(progress, /этанол|ккал/);
@@ -781,9 +782,9 @@ test('Уточнение имени исторического напитка с
   await s.press('Уточнить напиток');
   await s.press(/500 мл.*№1/);
   const old = s.findButton('Пиво');
-  assert.match(await s.press('Пиво'), /порции пива/);
-  assert.match(await s.nav('progress'), /порции пива/);
-  assert.match(await s.receive('/morning'), /порции пива/);
+  assert.match(await s.press('Пиво'), /1 л пива/);
+  assert.match(await s.nav('progress'), /1 л пива/);
+  assert.match(await s.receive('/morning'), /1 л пива/);
   assert.match(await s.receive({ callback: old }), /устарела/);
   const changed = await load(db, id), after = statsFor(changed, now);
   assert.deepEqual(changed.habits, [{ ...original.habits[0], items: [

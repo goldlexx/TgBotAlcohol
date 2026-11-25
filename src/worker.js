@@ -97,7 +97,6 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
   for (let attempt = 0; attempt < 5; attempt++) {
     const state = await load(env.DB, input.id, input.updateId, subject);
     if (state.duplicate) return empty();
-    state.closedTest = env.CLOSED_TEST === '1';
     response = dialog(state, input, now);
     if (response.accrueAwards && state.profile && !state.timelineChanged) {
       saveAwards(state, input.id, achievements(state.intervals, now));

@@ -1,4 +1,4 @@
-import { facts, sources, healthRotation } from '../content/facts.js';
+import { recoveryFacts, sources, healthRotation } from '../content/facts.js';
 import { ideas, cravings, lifeLabels } from '../content/ideas.js';
 import { awardCatalog } from '../content/achievements.js';
 import { calculate, MILESTONES } from './calculations.js';
@@ -74,11 +74,24 @@ export const metricOptions = {
 };
 export const reportMetrics = ['grams', 'calories'];
 const portion = ['порция', 'порции', 'порций'];
+const litersNumber = new Intl.NumberFormat('ru', { maximumFractionDigits: 2 });
 const drinkGenitives = { beer: 'пива', wine: 'вина', sparkling: 'игристого вина', vodka: 'водки',
   whisky: 'виски', brandy: 'коньяка', cocktail: 'коктейля', other: 'другого напитка' };
 function drinkLine(key, amount) {
   const [drink, ml] = JSON.parse(key);
   const name = drinkGenitives[drink];
+  if (name && drink !== 'other') {
+    if ((drink === 'wine' || drink === 'sparkling') && ml === 150 && amount.gte(1)) {
+      const count = Math.round(amount.toNumber());
+      const glasses = { one: 'бокал', few: 'бокала', many: 'бокалов' };
+      return '🍷 **≈' + number.format(count) + ' ' + glasses[plurals.select(count)] + ' ' + name + '** (по 150 мл)';
+    }
+    const total = amount.times(ml);
+    const icon = drink === 'beer' ? '🍺' : ['vodka', 'whisky', 'brandy'].includes(drink) ? '🥃' : '🥤';
+    const display = total.gte(1000) ? litersNumber.format(total.div(1000).toNumber()) + ' л'
+      : number.format(total.toNumber()) + ' мл';
+    return icon + ' **' + (total.lt(1) ? 'меньше 1 мл' : '≈' + display) + ' ' + name + '**';
+  }
   const forms = portion.map(word => name ? word + ' ' + name : word);
   const serving = ' по ' + volume(ml) + (name ? '' : ' · тип не указан');
   if (amount.lt(1)) return '**Менее одной порции**' + (name ? ' ' + name : '') + serving;
@@ -144,10 +157,8 @@ function idea(day, id, group, offset) {
   return pick(ideasByCategory.get(group) ?? ideas, day, id, offset).text;
 }
 const offsetFor = (text, length) => (/^\d{1,4}$/.test(text) ? Number(text) : 0) % length;
-const canPublishFact = fact => !fact.previewOnly || fact.clinical_status === 'approved';
-const publishedRotation = healthRotation.filter(canPublishFact);
-const publishedFacts = facts.filter(canPublishFact);
-const previewNote = 'Предварительный материал закрытого теста. Ожидает врачебной проверки.';
+const recoveryNote = 'Это ориентиры из исследований. В них наблюдали группы людей. У каждого восстановление идёт в своём темпе.';
+const recoveryCard = fact => fact.icon + ' **' + fact.category + '**\n' + fact.text;
 
 export function report(state, now, id, day, { automatic = false, milestone = null, afterEpisode = false } = {}) {
   if (!state.profile) return screen('☀️ **Утренний отчёт**\n\nНачни отслеживание, чтобы увидеть свой отчёт.', [nav('☀️ Начать', 'begin')]);
@@ -167,11 +178,12 @@ export function report(state, now, id, day, { automatic = false, milestone = nul
   }
   const content = p.content ?? 'both';
   if (['fact', 'both'].includes(content)) {
-    const fact = pick(state.closedTest && !automatic ? healthRotation : publishedRotation, day, id);
-    lines.push('🫀 **Факт о здоровье**\n\n' + fact.text + (canPublishFact(fact) ? '' : '\n' + previewNote));
+    const fact = pick(healthRotation, day, id);
+    lines.push('🫀 **Факт о здоровье**\n\n' + fact.text);
   }
   if (['idea', 'both'].includes(content)) lines.push('💡 **Идея дня**\n\n' + idea(day, id));
-  return screen(lines.join('\n\n'), ...reportButtons);
+  return screen(lines.join('\n\n'), ...reportButtons,
+    ['fact', 'both'].includes(content) ? [nav('ℹ️ Методика и источники', 'method.health')] : []);
 }
 
 function paginate(rows, page, route, size = 5) {
@@ -353,32 +365,35 @@ export function view(route, state, now, id) {
     }
     case 'relief': return hasMedicalRisk(state) || openEpisode(state) ? riskView : screen('Ещё одна волна позади. Продолжай в своём темпе. ☀️', back('craving'));
     case 'recovery': {
-      const factText = rows => rows.map(([icon, key]) => {
-        const fact = facts.find(item => item.id === key);
-        return icon + ' **' + fact.category + '**\n' + fact.text;
-      }).join('\n\n');
+      const factText = (...ids) => ids.map(id => recoveryCard(recoveryFacts.find(fact => fact.id === id))).join('\n\n');
       return screen(['🫀 **Восстановление организма**',
-        'Это ориентиры из исследований. Они описывают наблюдения в группах. Темпы восстановления индивидуальны.',
-        '**Первые дни**\n\n' + factText([['😴', 'sleep']]),
-        '**Наблюдения примерно за месяц**\n\n' + factText([['❤️', 'pressure'], ['🫀', 'liver']]),
-        '**Исследования на протяжении месяцев**\n\n' + factText([['🧠', 'memory'], ['🎯', 'attention']])].join('\n\n'),
-      [nav('📅 Все наблюдения', 'stages')], [nav('🔬 Научные источники', 'sources.recovery')], [nav('ℹ️ Методика и источники', 'method.recovery')], back());
+        recoveryNote,
+        '**Сон и самочувствие**\n\n' + factText('sleep-quality'),
+        '**Наблюдения примерно за месяц**\n\n' + factText('pressure', 'liver'),
+        '**Исследования на протяжении месяцев**\n\n' + factText('memory', 'attention')].join('\n\n'),
+      [nav('📅 Все наблюдения', 'stages')], [nav('ℹ️ Методика и источники', 'method.recovery')], back());
     }
     case 'stages': {
-      const chunk = paginate(state.closedTest ? facts : publishedFacts, arg, 'stages', 4);
-      return screen('🫀 **Наблюдения о восстановлении**\n\n' + chunk.rows.map(f => '**' + f.category + '**\n' + f.text +
-        (canPublishFact(f) ? '' : '\n' + previewNote + '\n' + sources[f.source_id][2])).join('\n\n'),
-        chunk.buttons, [nav('🔬 Научные источники', 'sources.recovery')], back('recovery'));
+      const chunk = paginate(recoveryFacts, arg, 'stages', 4);
+      return screen(['🫀 **Наблюдения о восстановлении**', recoveryNote, ...chunk.rows.map(recoveryCard)].join('\n\n'),
+        chunk.buttons, [nav('ℹ️ Методика и источники', 'method.recovery')], back('recovery'));
     }
-    case 'method': return screen('ℹ️ **Как считаем**\n\n💰 Экономия и 🥤 невыпитые порции — оценки по прежней привычке и указанным объёмам.\n⚖️ Чистый этанол — по объёму и крепости напитков.\n🔥 Калории — по энергетической ценности этанола.\n📅 Трезвые дни и выходные — по указанной истории употребления.',
-      [nav('📖 Методика расчётов', 'formulas'), nav('🔬 Научные источники', 'sources.method')], back(['progress', 'details', 'settings', 'recovery'].includes(arg) ? arg : 'menu'));
+    case 'method':
+      if (arg === 'recovery' || arg === 'health') {
+        return screen('ℹ️ **Методика и источники**\n\n' + recoveryNote,
+          [nav('🔬 Научные источники', 'sources.' + arg)], back(arg === 'recovery' ? 'recovery' : 'morning'));
+      }
+      return screen('ℹ️ **Как считаем**\n\n💰 Экономия и 🥤 невыпитые напитки — оценки по прежней привычке.\n⚖️ Чистый этанол — по объёму и крепости напитков.\n🔥 Калории — по энергетической ценности этанола.\n📅 Трезвые дни и выходные — по указанной истории употребления.',
+        [nav('📖 Методика расчётов', 'formulas'), nav('🔬 Научные источники', 'sources.method')], back(['progress', 'details', 'settings'].includes(arg) ? arg : 'menu'));
     case 'formulas': return screen('📖 **Методика расчётов**\n\nСутки серии — 24 часа. Трезвый день — целая местная дата внутри известного периода воздержания. Выходные — полностью завершённые суббота и воскресенье внутри одного такого периода. Если известно только число, отсчёт начинается со следующей полуночи.\n\n**Чистый этанол** = порции × мл × крепость / 100 × 0,789 г по каждому напитку. Энергия этанола = граммы × 7. В эту цифру входит только этанол.\n\n**Пример**\n1 400 ₽ и 7 порций за неделю дают ≈200 ₽ и ≈1 порцию за каждые 24 часа. В календарном расчёте день засчитывается, если целиком попадает и в период воздержания, и в одну версию привычки. День смены привычки посреди дня пропускается в этой оценке.\n\nЭкономия берётся из общего бюджета или отдельных цен. Расходы самого эпизода не вычитаются. При неполных сведениях оценка может быть частичной. Рубежи в годах считаются по 365 суток.',
       [nav('🔬 Научные источники', 'sources.method')], back('method'));
     case 'sources': {
-      const chunk = paginate(Object.values(sources), other, 'sources.' + (arg ?? 'method'), 5);
-      return screen('🔬 **Научные источники**\n\n' + [...Map.groupBy(chunk.rows, row => row[0])].map(([section, rows]) =>
-        '**' + section + '**\n' + rows.map(([, text, url]) => text + '\n' + url).join('\n')).join('\n\n'),
-        chunk.buttons, back(arg === 'recovery' ? 'recovery' : 'method'));
+      const relevant = arg === 'recovery' ? recoveryFacts : arg === 'health' ? healthRotation : null;
+      const rows = relevant ? [...new Set(relevant.map(fact => fact.source_id))].map(id => sources[id]) : Object.values(sources);
+      const chunk = paginate(rows, other, 'sources.' + (arg ?? 'method'), 5);
+      return screen('🔬 **Научные источники**\n\nВыбери публикацию.',
+        ...chunk.rows.map(([, title, url]) => [{ text: title, url }]), chunk.buttons,
+        back(relevant ? 'method.' + arg : 'method'));
     }
     default: return screen('Это меню устарело. Открой нужный раздел ещё раз.', back());
   }
