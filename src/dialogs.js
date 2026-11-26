@@ -148,6 +148,7 @@ function finishDate(state, id, now, date) {
   if (f.dateRole === 'base' && f.flow === 'new') {
     state.profile = { ...defaults, zone: f.zone, historyZone: f.zone, base: date,
       ...(state.neutral ? { medicalHold: true } : {}) };
+    state.neutral = false; // The profile now carries the pre-registration hold.
     planTimeline(state, id, now, date, []);
     enter(state, 'reportTime', { flow: 'onboard', frequency: 'daily' });
     return { ...view('progress.new', state, now, id), keyboard: true,

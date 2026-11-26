@@ -153,6 +153,7 @@ test('P0 помощь до регистрации, симптомы и сомн�
     assert.equal(row.neutral, Number(label === 'Есть симптомы'));
     assert.ok(!/urgent|symptom|initial|reason|unsure/.test(row.fsm));
     if (row.neutral) {
+      assert.match(await s.press('🚑 Экстренная помощь'), /Немедленно вызови скорую[\s\S]+112 или 103/);
       assert.match(await s.nav('craving'), /Резкое прекращение/);
       assert.match(await s.nav('crave.stress'), /медицинской оценкой/);
     }
@@ -167,6 +168,11 @@ test('P0 помощь до регистрации, симптомы и сомн�
   assert.doesNotMatch(await s.press('Сейчас'), /Цель|▰|▱/);
   assert.equal(s.messages().length, 2);
   assert.match(s.messages()[1].text, /Автоматические отчёты на паузе/);
+  const registered = await load(db, 103);
+  assert.equal(registered.neutral, false);
+  assert.equal(registered.profile.medicalHold, true);
+  assert.match(await s.press('06:00'), /Автоматические отчёты на паузе/);
+  assert.equal((await load(db, 103)).job, null);
 });
 
 test('Регистрация, /start без сброса, контент, цель, часовой пояс и выключение уведомлений', async () => {
@@ -226,7 +232,8 @@ test('Медицинские экраны сохраняют профиль и �
   assert.match(await s.nav('craving'), /Резкое прекращение/);
   const manual = await s.receive('/morning');
   assert.match(manual, /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
-  assert.match(manual, /Резкое прекращение/);
+  assert.match(manual, /При симптомах отмены/);
+  assert.doesNotMatch(manual, /Резкое прекращение/);
   const after = await load(db, id);
   assert.deepEqual(after.profile, before.profile);
   assert.deepEqual(after.intervals, before.intervals);
@@ -498,10 +505,9 @@ test('Приватное превью обратимо и не снимает м
   const state = await load(db, id);
   const explicit = await s.receive('/morning');
   assert.match(explicit, /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
-  assert.equal(await s.nav('morning.preview'), 'Твой отчёт готов');
+  assert.equal(await s.nav('morning.preview'), 'Автоматическая отправка на паузе.');
   const push = report(state, now, id, today(now, 'UTC'), { automatic: true });
-  assert.equal(push.text, 'Твой отчёт готов');
-  assert.equal(push.buttons[0][0].callback_data, 'n:morning');
+  assert.equal(push.text, 'Автоматическая отправка на паузе.');
   await s.nav('edit.push');
   await s.press('Обычный отчёт');
   assert.equal(await s.nav('morning.preview'), 'Автоматическая отправка на паузе.');
@@ -511,7 +517,7 @@ test('Приватное превью обратимо и не снимает м
   await s.nav('edit.push');
   await s.press('Нейтральное сообщение');
   assert.deepEqual((await load(db, id)).profile, state.profile);
-  assert.equal(await s.nav('morning.preview'), 'Твой отчёт готов');
+  assert.equal(await s.nav('morning.preview'), 'Автоматическая отправка на паузе.');
   assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), null);
 });
 
@@ -648,7 +654,7 @@ test('Повторное исправление завершённого эпи�
 });
 
 async function seed(ids, options = {}) {
-  const base = { ms: now - 9 * DAY, precision: 'minute' };
+  const base = options.base ?? { ms: now - 9 * DAY, precision: 'minute' };
   const p = { ...defaults, zone: 'UTC', historyZone: 'UTC', frequency: 'daily', base, ...options };
   await db.batch(ids.flatMap(id => [
     statement('INSERT INTO users(id,generation,profile) VALUES (?,?,?)', id, 'fixture-' + id, JSON.stringify(p)),
@@ -1080,8 +1086,45 @@ for (const [id, flag] of [[172, 'medicalHold'], [173, 'neutral'], [174, 'trackin
     assert.equal(profile.trackingPaused, undefined);
     assert.equal(job, null);
     assert.match(await s.nav('notifications'), /Автоматические отчёты на паузе/);
+    assert.match(await s.nav('recovery'), /При симптомах отмены[\s\S]*Следующий рубеж/);
+    assert.match(await s.receive('/morning'), /Следующий рубеж[\s\S]*Идея дня[\s\S]*При симптомах отмены/);
+    assert.match(await s.press('⚕️ Мне плохо'), /Немедленно вызови скорую/);
+    assert.match(await s.press('Главное меню'), /Мой прогресс/);
+    assert.deepEqual((await load(db, id)).profile, profile);
   });
 }
+
+test('Оба сохранённых флага: 23 дня 20 часов, полное восстановление и ручной отчёт без изменения данных', async () => {
+  const id = 156, s = session(id);
+  const base = { ms: now - 23 * DAY - 20 * 3_600_000, precision: 'minute' };
+  await seed([id], { base, frequency: 'off', zone: 'Europe/Moscow', historyZone: 'Europe/Moscow', medicalHold: true });
+  await db.batch([
+    statement('UPDATE users SET neutral=1 WHERE id=?', id),
+    statement('DELETE FROM delivery_jobs WHERE user_id=?', id),
+    statement("INSERT INTO habit_versions VALUES (?,?,'average',7,'RUB',140000)", id, base.ms),
+    statement('INSERT INTO habit_items VALUES (?,?,0,NULL,7,500,5,NULL)', id, base.ms),
+    statement("INSERT INTO habit_drinks VALUES (?,?,0,'beer')", id, base.ms)
+  ]);
+  const before = await load(db, id);
+  const recovery = await s.nav('recovery');
+  assert.match(recovery, /23 дня 20 часов без алкоголя[\s\S]+Первые недели[\s\S]+Печень[\s\S]+Следующий рубеж — 30 дней[\s\S]+61%[\s\S]+6 дней 4 часа/);
+  s.findButton('📅 Все этапы восстановления');
+  s.findButton('🔬 Подробнее и источники');
+  s.findButton('🚑 Экстренная помощь');
+  const manual = await s.receive('/morning');
+  assert.match(manual, /^☀️ <b>Доброе утро!<\/b>[\s\S]+23 дня 20 часов[\s\S]+61%[\s\S]+Сэкономлено[\s\S]+Не выпито[\s\S]+Факт о здоровье[\s\S]+Идея дня/);
+  for (const text of [recovery, manual]) {
+    assert.match(text, /При симптомах отмены/);
+    assert.doesNotMatch(text, /Резкое прекращение|судорогах|112 или 103/);
+  }
+  await s.press('🚑 Экстренная помощь');
+  assert.match(s.messages()[0].text, /Немедленно вызови скорую/);
+  assert.match(await s.press('Главное меню'), /Мой прогресс/);
+  assert.match(await s.nav('notifications'), /Утренний отчёт выключен[\s\S]+Автоматические отчёты на паузе/);
+  assert.doesNotMatch(s.messages()[0].text, /Следующий отчёт:/);
+  const after = await load(db, id);
+  for (const key of ['profile', 'neutral', 'intervals', 'episodes', 'habits', 'job']) assert.deepEqual(after[key], before[key]);
+});
 
 test('Просмотр медицинской помощи без ответов о риске не устанавливает флаги и не меняет очередь', async () => {
   const id = 175, s = session(id);

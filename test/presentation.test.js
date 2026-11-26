@@ -192,15 +192,35 @@ test('Восстановление сохраняет приоритет пом�
   assert.match(view('progress', resumed, now, 1).text, /Всего трезвых дней: \*\*96\*\*/);
   const open = { ...resumed, intervals: [old], episodes: [{ start: old.end, last: null }] };
   const paused = view('recovery', open, now, 1);
-  assert.match(paused.text, /Медицинская помощь[\s\S]+Серия на паузе[\s\S]+остаются в истории/);
+  assert.match(paused.text, /Серия на паузе[\s\S]+достижения сохранены[\s\S]+При симптомах отмены[\s\S]+Общие материалы/);
   assert.doesNotMatch(paused.text, /Следующий рубеж|0 часов без алкоголя/);
+  for (const route of ['n:awards', 'n:sources.recovery', 'n:physical', 'n:emergency']) {
+    assert.ok(paused.buttons.flat().some(button => button.callback_data === route));
+  }
+  const manual = view('morning', open, now, 1);
+  assert.match(manual.text, /Серия на паузе[\s\S]+Факт о здоровье[\s\S]+Идея дня[\s\S]+При симптомах отмены/);
+  assert.doesNotMatch(manual.text, /Следующий рубеж|Резкое прекращение/);
+  assert.equal(view('morning.preview', { ...open, profile: { ...open.profile, privatePush: true } }, now, 1).text,
+    'Автоматическая отправка на паузе.');
   assert.doesNotMatch(view('stages', open, now, 1).text, /📍 Первые сутки/);
   const medical = { ...seriesState(365), profile: { ...state.profile, medicalHold: true } };
-  assert.match(view('recovery', medical, now, 1).text, /Медицинская помощь[\s\S]+365 дней без алкоголя/);
+  assert.match(view('recovery', medical, now, 1).text, /365 дней без алкоголя[\s\S]+При симптомах отмены[\s\S]+Год и дольше/);
   assert.ok(view('recovery', medical, now, 1).buttons.flat().some(button => button.callback_data === 'n:emergency'));
-  assert.match(view('morning', medical, now, 1).text, /Медицинская помощь/);
+  assert.match(view('morning', medical, now, 1).text, /При симптомах отмены/);
   assert.match(view('recovery', { ...state, intervals: [{ start: now + 1000, end: null }] }, now, 1).text, /ещё не начался/);
   assert.match(view('recovery', { ...state, profile: null, intervals: [] }, now, 1).text, /Начни отслеживание/);
+});
+
+test('До регистрации доступны справка, общие материалы восстановления и возврат к приветствию', () => {
+  const guest = { ...state, profile: null, intervals: [] };
+  const educational = view('recovery', guest, now, 1);
+  assert.match(educational.text, /Начни отслеживание[\s\S]+Сон в первые дни/);
+  assert.doesNotMatch(educational.text, /Следующий рубеж|без алкоголя\*\*/);
+  assert.match(view('morning', guest, now, 1).text, /Начни отслеживание/);
+  assert.match(view('progress', guest, now, 1).text, /Начни отслеживание/);
+  assert.match(view('notifications', guest, now, 1).text, /Счастье без алкоголя/);
+  assert.match(view('physical', guest, now, 1).text, /Немедленно вызови скорую/);
+  assert.match(view('menu', guest, now, 1).text, /Счастье без алкоголя/);
 });
 
 test('Факт дня и его источник сохраняются при изменении срока серии в течение дня', () => {

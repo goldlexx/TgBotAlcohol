@@ -22,6 +22,7 @@ export const screen = (text, ...buttons) => ({ text, buttons });
 const menuButton = [nav('Главное меню', 'menu')];
 const careButton = [nav('Куда обратиться', 'care')];
 const evidenceLabel = '🔬 Подробнее и источники';
+const symptomNote = '⚕️ **При симптомах отмены** обратись за медицинской помощью.';
 export const welcome = screen('☀️ **Счастье без алкоголя**\n\nВ жизни без алкоголя можно открыть для себя что-то новое.\n\nСледи за прогрессом, замечай положительные изменения и находи новые способы радоваться жизни.\n\nБесплатно. Без рекламы. Без осуждения.',
   [nav('☀️ Начать', 'begin'), nav('🆘 Помощь сейчас', 'help')], [nav('🔐 О моих данных', 'privacy')], ...helpButtons.map(b => [b]));
 export const help = screen('🆘 **Помощь сейчас**\n\nЕсли физически плохо или нужна срочная помощь, выбери подходящий маршрут.',
@@ -184,11 +185,12 @@ function recoveryView(state, now) {
   const heading = '🫀 **Восстановление организма**';
   const stats = recoveryStats(state, now);
   const paused = openEpisode(state);
+  const showHelp = paused || hasMedicalRisk(state);
   const links = [[nav('📅 Все этапы восстановления', 'stages')], [nav(evidenceLabel, 'sources.recovery')], menuButton];
-  if (paused || hasMedicalRisk(state)) {
-    const time = paused ? '**Серия на паузе**\nПрежние трезвые дни остаются в истории.' : stats && series(stats);
-    return screen([heading, '⚕️ **Медицинская помощь**\n' + risk, time].filter(Boolean).join('\n\n'),
-      ...helpButtons.map(button => [button]), ...links);
+  if (paused) {
+    return screen([heading, '**Серия на паузе**\nПрежние трезвые дни и достижения сохранены.',
+      symptomNote, '**Общие материалы**\nКарточки по темам доступны в разделе «Подробнее и источники».'].join('\n\n'),
+    ...helpButtons.map(button => [button]), [nav('🏆 Достижения', 'awards')], ...links);
   }
   const days = (stats?.current ?? 0) / DAY;
   const [, period, ids] = recoveryPeriods.findLast(([start]) => days >= start);
@@ -200,23 +202,24 @@ function recoveryView(state, now) {
   const cards = facts.filter(fact => !monthly.includes(fact)).map(recoveryCard);
   if (monthly.length) cards.push('**Впереди · ориентиры первого месяца**\n\n' + monthly.map(recoveryCard).join('\n\n'));
   const milestone = stats && (stats.next ? milestoneText(stats) : '🎯 Все временные рубежи пройдены.');
-  return screen([heading, count, (stats ? '📍' : 'ℹ️') + ' **' + period + '**', ...cards, milestone, recoveryNote].filter(Boolean).join('\n\n'),
-    [helpButtons[0]], ...links);
+  return screen([heading, count, showHelp && symptomNote, (stats ? '📍' : 'ℹ️') + ' **' + period + '**',
+    ...cards, milestone, recoveryNote].filter(Boolean).join('\n\n'),
+    [helpButtons[0]], showHelp ? [helpButtons[1]] : [], ...links);
 }
 
 export function report(state, now, id, day, { automatic = false, milestone = null, afterEpisode = false } = {}) {
   if (!state.profile) return screen('☀️ **Утренний отчёт**\n\nНачни отслеживание, чтобы увидеть свой отчёт.', [nav('☀️ Начать', 'begin')]);
   const p = state.profile;
-  if (automatic && p.privatePush) return screen('Твой отчёт готов', [nav('Открыть отчёт', 'morning')]);
   const paused = openEpisode(state);
-  const medical = hasMedicalRisk(state) || paused;
-  if (automatic && medical) return screen('Автоматическая отправка на паузе.');
+  const showHelp = hasMedicalRisk(state) || paused;
+  if (automatic && showHelp) return screen('Автоматическая отправка на паузе.');
+  if (automatic && p.privatePush) return screen('Твой отчёт готов', [nav('Открыть отчёт', 'morning')]);
   const stats = statsFor(state, now);
   if (!automatic && stats.earlier && today(state.intervals.at(-1).start + stats.earlier * DAY, p.zone) === day) milestone = stats.earlier;
   const greeting = milestone ? '🏆 **' + awardCatalog[milestone][2] + '**'
     : afterEpisode ? '☀️ **Твой путь продолжается**' : '☀️ **Доброе утро!**';
-  const lines = [...(medical ? ['⚕️ **Медицинская помощь**\n\n' + risk] : []), greeting, progressText(state, stats, 'morning')];
-  if (!medical && p.goal && stats.current >= p.goal * DAY &&
+  const lines = [greeting, progressText(state, stats, 'morning')];
+  if (!paused && p.goal && stats.current >= p.goal * DAY &&
       today(state.intervals.at(-1).start + p.goal * DAY, p.zone) === day) {
     lines.push('🎉 **Твоя личная цель достигнута!** ' + label(p.goal) + ' без алкоголя. Счётчик продолжает работать.');
   }
@@ -224,8 +227,10 @@ export function report(state, now, id, day, { automatic = false, milestone = nul
   const fact = ['fact', 'both'].includes(content) ? pick(healthRotation, day, id) : null;
   if (fact) lines.push('🫀 **Факт о здоровье**\n\n' + fact.text);
   if (['idea', 'both'].includes(content)) lines.push('💡 **Идея дня**\n\n' + idea(day, id));
+  if (showHelp) lines.push(symptomNote);
   return screen(lines.join('\n\n'), ...reportButtons,
-    fact ? [nav(evidenceLabel, 'evidence.' + fact.id + '.health')] : []);
+    fact ? [nav(evidenceLabel, 'evidence.' + fact.id + '.health')] : [],
+    ...(showHelp ? helpButtons.map(button => [button]) : []));
 }
 
 function paginate(rows, page, route, size = 5) {
