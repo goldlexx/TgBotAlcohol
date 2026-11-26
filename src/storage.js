@@ -1,11 +1,14 @@
 import { medicalHold } from './safety.js';
+import { today } from './time.js';
 
 export const stmt = (db, sql, ...args) => db.prepare(sql).bind(...args);
 export const first = (db, sql, ...args) => stmt(db, sql, ...args).first();
 
-export async function load(db, id, updateId = -1, subject = '') {
+export async function load(db, id, updateId = -1, subject = '', now = null) {
   const rows = (await db.batch([
-    stmt(db, 'SELECT * FROM users WHERE id=?', id),
+    stmt(db, `SELECT u.*, j.next_due_at, j.slot, (SELECT json_group_array(local_day) FROM delivery_receipts
+      WHERE user_id=u.id AND local_day>=date(?/1000, 'unixepoch', '-2 days') AND status<>'retry') AS reported_days
+      FROM users u LEFT JOIN delivery_jobs j ON j.user_id=u.id WHERE u.id=?`, now, id),
     stmt(db, 'SELECT * FROM episodes WHERE user_id=? ORDER BY start,id', id),
     stmt(db, 'SELECT * FROM abstinence_intervals WHERE user_id=? ORDER BY start', id),
     stmt(db, 'SELECT * FROM habit_versions WHERE user_id=? ORDER BY effective', id),
@@ -14,7 +17,7 @@ export async function load(db, id, updateId = -1, subject = '') {
     stmt(db, 'SELECT 1 FROM deletion_markers WHERE subject=? AND update_id>=?', subject, updateId),
     stmt(db, 'SELECT days FROM achievements WHERE user_id=?', id)
   ])).map(row => row.results);
-  const [user] = rows[0];
+  const { next_due_at, slot, reported_days, ...user } = rows[0][0] ?? {};
   const items = Map.groupBy(rows[4], row => row.effective);
   const profile = user?.profile ? JSON.parse(user.profile) : null;
   if (profile && Object.hasOwn(profile, 'trackingPaused')) {
@@ -22,8 +25,10 @@ export async function load(db, id, updateId = -1, subject = '') {
     delete profile.trackingPaused;
   }
   return {
-    user, profile,
-    fsm: user ? JSON.parse(user.fsm) : {}, neutral: Boolean(user?.neutral),
+    user: rows[0].length ? user : undefined, profile,
+    fsm: user.fsm ? JSON.parse(user.fsm) : {}, neutral: Boolean(user.neutral),
+    job: slot == null ? null : { next_due_at, slot },
+    reportedDays: JSON.parse(reported_days ?? '[]'),
     episodes: rows[1], intervals: rows[2], awards: new Set(rows[7].map(row => row.days)),
     habits: rows[3].map(row => ({ ...row, items: items.get(row.effective) ?? [] })),
     duplicate: rows[5].length > 0 || (updateId >= 0 && rows[6].length > 0),
@@ -86,5 +91,10 @@ export function saveHabit(state, id, habit, effective) {
 export function reschedule(state, id, slot) {
   state.writes.push(['UPDATE users SET delivery_epoch=delivery_epoch+1 WHERE id=?', id]);
   state.writes.push(['DELETE FROM delivery_jobs WHERE user_id=?', id]);
-  if (slot !== null) state.writes.push(['INSERT INTO delivery_jobs VALUES (?,?,?)', id, slot, slot]);
+  state.job = slot === null ? null : { next_due_at: slot, slot };
+  if (slot !== null) {
+    state.writes.push([`INSERT INTO transaction_guard(ok) SELECT 0 WHERE EXISTS(
+      SELECT 1 FROM delivery_receipts WHERE user_id=? AND local_day=? AND status<>'retry')`, id, today(slot, state.profile.zone)]);
+    state.writes.push(['INSERT INTO delivery_jobs VALUES (?,?,?)', id, slot, slot]);
+  }
 }

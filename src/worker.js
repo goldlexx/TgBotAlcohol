@@ -4,6 +4,7 @@ import { first, load, save, saveAwards } from './storage.js';
 import { achievements } from './calculations.js';
 import { allowed, message, telegram } from './telegram.js';
 import { tick } from './scheduler.js';
+import { FRESH } from './schedule.js';
 
 const encoder = new TextEncoder();
 const empty = () => new Response(null, { status: 204 });
@@ -79,11 +80,13 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
         AND instr(',' || ? || ',', ',' || id || ',')>0
         AND neutral=0 AND coalesce(json_extract(profile,'$.medicalHold'),json_extract(profile,'$.trackingPaused'),0)=0
         AND EXISTS(SELECT 1 FROM abstinence_intervals WHERE user_id=profiles.id AND end IS NULL)
+        AND EXISTS(SELECT 1 FROM delivery_jobs WHERE user_id=profiles.id AND slot>=?)
         AND (frequency NOT IN ('weekly','selected') OR (
           json_type(profile,'$.weekdays')='array' AND json_array_length(profile,'$.weekdays')>0
           AND NOT EXISTS(SELECT 1 FROM json_each(profile,'$.weekdays') WHERE type!='integer' OR value NOT BETWEEN 1 AND 7)
         ))) AS eligible FROM profiles`,
-    env.CLOSED_TEST === '1' ? env.ALLOWED_CHAT_IDS.trim() : env.ALLOWED_CHAT_IDS.split(',').map(value => value.trim()).join(','));
+    env.CLOSED_TEST === '1' ? env.ALLOWED_CHAT_IDS.trim() : env.ALLOWED_CHAT_IDS.split(',').map(value => value.trim()).join(','),
+    now - FRESH);
     const { total, registered, subscribed, eligible } = counts;
     const text = ['📊 **Статистика бота**', '👥 Пользователей в базе: ' + total,
       '✅ Завершили регистрацию: ' + registered, '🔔 Включили уведомления: ' + subscribed,
@@ -95,7 +98,7 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
   const subject = await subjectFor(input.id, env.WEBHOOK_SECRET);
   let response;
   for (let attempt = 0; attempt < 5; attempt++) {
-    const state = await load(env.DB, input.id, input.updateId, subject);
+    const state = await load(env.DB, input.id, input.updateId, subject, now);
     if (state.duplicate) return empty();
     response = dialog(state, input, now);
     if (response.accrueAwards && state.profile && !state.timelineChanged) {

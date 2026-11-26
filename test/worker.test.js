@@ -15,7 +15,7 @@ import { today } from '../src/time.js';
 const now = Date.parse('2026-03-10T08:00Z');
 const secret = 'local-synthetic-only';
 const idRange = Array.from({ length: 200 }, (_, i) => 800_000 + i);
-const chats = [...Array.from({ length: 60 }, (_, i) => 100 + i), ...idRange];
+const chats = [...Array.from({ length: 80 }, (_, i) => 100 + i), ...idRange];
 const fakeEnv = { WEBHOOK_SECRET: secret, TELEGRAM_TOKEN: 'local-stub', ALLOWED_CHAT_IDS: chats.join(',') };
 let mf, db, seq = 1000;
 const statement = (sql, ...args) => db.prepare(sql).bind(...args);
@@ -80,19 +80,23 @@ function session(id) {
   return { receive, nav, press, findButton, messages: () => messages };
 }
 
-async function onboard(s, { notifications = false, habit = false } = {}) {
+async function register(s, zone = 'UTC') {
   await s.receive('/start');
   await s.press('☀️ Начать');
   await s.press('Симптомов сейчас нет');
   await s.press('Нет');
   await s.press('Другой город');
-  await s.receive('UTC');
+  await s.receive(zone);
   await s.press('Подтвердить');
   await s.press('Указать дату и время');
   await s.receive('01.03.2026');
-  const progress = await s.receive('07:00');
+  return s.receive('07:00');
+}
+
+async function onboard(s, { notifications = false, habit = false } = {}) {
+  const progress = await register(s);
   if (habit) {
-    await s.press('💰 Настроить статистику');
+    await s.nav('edit.habit');
     await s.press('💰 Считать только деньги');
     await s.press('За неделю');
     await s.receive('1 400,00 ₽');
@@ -101,9 +105,9 @@ async function onboard(s, { notifications = false, habit = false } = {}) {
   await s.nav('edit.goal');
   await s.press('7 дней');
   if (notifications) {
-    await s.nav('edit.notify');
-    await s.press('Каждый день в 08:00');
-    await s.press('Включить отчёты');
+    await s.nav('edit.subscribe');
+    await s.press('08:00');
+    await s.press('⚙️ Настройки уведомлений');
     await s.press('Формат превью');
     await s.press('Нейтральное сообщение');
   }
@@ -161,7 +165,8 @@ test('P0 помощь до регистрации, симптомы и сомн�
   await s.press('Записать дату');
   await s.press(/^Москва /);
   assert.doesNotMatch(await s.press('Сейчас'), /Цель|▰|▱/);
-  assert.equal(s.messages().length, 1);
+  assert.equal(s.messages().length, 2);
+  assert.match(s.messages()[1].text, /Автоматические отчёты на паузе/);
 });
 
 test('Регистрация, /start без сброса, контент, цель, часовой пояс и выключение уведомлений', async () => {
@@ -292,7 +297,7 @@ test('Короткая регистрация: ошибка пояса и дат
   await s.press('Помню только дату');
   assert.match(await s.receive('31.02.2026'), /Проверь формат/);
   assert.match(await s.receive('14.11.2026'), /уже наступили/);
-  assert.match(await s.receive('01.03.2026'), /Твой путь начался/);
+  assert.match(await s.receive('01.03.2026'), /Мой прогресс/);
   const output = s.messages();
   assert.equal(output.length, 2);
   assert.ok(output.every(body => body.parse_mode === 'HTML'));
@@ -538,7 +543,7 @@ test('Форматы даты, времени и суммы, возврат из
   assert.match(await s.receive('31.2.2026'), /Проверь формат/);
   assert.match(await s.receive('1.3.2026'), /01\.03\.2026/);
   assert.match(await s.receive('24:00'), /Проверь формат/);
-  assert.match(await s.receive('7:00'), /Твой путь начался/);
+  assert.match(await s.receive('7:00'), /Мой прогресс/);
   assert.equal((await load(db, id)).profile.base.ms, Date.parse('2026-03-01T04:00Z'));
   await s.nav('edit.habit');
   await s.press('💰 Считать только деньги');
@@ -739,12 +744,10 @@ test('Старое недельное расписание без дней пр�
   assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), null);
   assert.equal((await load(db, id)).profile.frequency, 'weekly');
   await s.nav('edit.notify');
-  await s.press('Другая частота или время');
   await s.press('В выбранные дни недели');
   await s.press('Пн');
   await s.press('Готово');
   await s.press('08:00');
-  await s.press('Сохранить');
   assert.deepEqual((await load(db, id)).profile.weekdays, [1]);
   assert.ok(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id));
 });
@@ -856,9 +859,8 @@ test('Коррекция серии и удаление меняют тольк�
     statement("INSERT INTO delivery_receipts VALUES (?,'2026-03-07','sent',1,701,1)", id),
     statement("INSERT INTO delivery_receipts VALUES (?,'2026-03-09','sent',1,702,1)", id)
   ]);
-  await s.nav('edit.notify');
-  await s.press('Каждый день в 08:00');
-  await s.press('Включить отчёты');
+  await s.nav('edit.subscribe');
+  await s.press('08:00');
   const correct = async date => {
     await s.nav('correct.702');
     await s.press('Указать дату и время');
@@ -940,6 +942,204 @@ test('/admin авторизует числовой ID и возвращает а
   assert.doesNotMatch(replies[0].text, /fixture-|medicalHold|historyZone/);
   assert.deepEqual(await load(db, id), before);
   await statement('DELETE FROM delivery_jobs WHERE user_id IN (?,?)', id, other).run();
+});
+
+for (const [index, clock] of ['06:00', '07:00', '08:00', '09:00', '10:00', '12:00'].entries()) {
+  test('Регистрация: пресет ' + clock + ' сразу сохраняет ежедневный отчёт в местном поясе', async () => {
+    const id = 160 + index, s = session(id);
+    await register(s, 'Москва');
+    const [progress, offer] = s.messages();
+    assert.match(progress.text, /Мой прогресс/);
+    assert.match(offer.text, /Ежедневный отчёт[\s\S]*Москва/);
+    assert.equal((await load(db, id)).profile.frequency, 'off');
+    assert.equal(await get('SELECT 1 FROM delivery_jobs WHERE user_id=?', id), null);
+    const day = clock > '11:00' ? '10' : '11';
+    const expected = Date.parse('2026-03-' + day + 'T' + clock + '+03:00');
+    const result = await s.press(clock);
+    assert.match(result, /Ежедневный отчёт подключён/);
+    assert.ok(result.includes('Следующий отчёт: ' + day + '.03.2026, ' + clock));
+    const { profile, job, fsm } = await load(db, id);
+    assert.equal(profile.frequency, 'daily');
+    assert.equal(profile.clock, clock);
+    assert.equal(profile.zone, 'Europe/Moscow');
+    assert.deepEqual(job, { next_due_at: expected, slot: expected });
+    assert.deepEqual(fsm, {});
+  });
+}
+
+test('Регистрация: собственное время, понятная ошибка, возврат и сохранение без подтверждения', async () => {
+  const id = 166, s = session(id);
+  await register(s);
+  const oldPreset = s.findButton('06:00');
+  await s.press('🕒 Указать своё время');
+  assert.match(await s.receive('24:00'), /от 00:00 до 23:59/);
+  assert.equal((await load(db, id)).profile.frequency, 'off');
+  s.findButton('Отмена');
+  await s.press('Назад');
+  const custom = s.findButton('🕒 Указать своё время');
+  assert.match(await s.receive({ callback: oldPreset }), /Кнопка устарела/);
+  await s.receive({ callback: custom });
+  assert.match(await s.receive('6:00'), /Ежедневный отчёт подключён/);
+  assert.equal((await load(db, id)).profile.clock, '06:00');
+});
+
+test('Регистрация: «Не сейчас» и отмена своего времени оставляют подписку выключенной', async () => {
+  for (const [id, cancel] of [[167, false], [168, true]]) {
+    const s = session(id);
+    await register(s);
+    const oldPreset = s.findButton('06:00');
+    if (cancel) await s.press('🕒 Указать своё время');
+    assert.match(await s.press(cancel ? 'Отмена' : 'Не сейчас'), /Мой прогресс/);
+    assert.match(await s.receive({ callback: oldPreset }), /Кнопка устарела/);
+    const { profile, fsm, job } = await load(db, id);
+    assert.equal(profile.frequency, 'off');
+    assert.equal(profile.clock, '08:00');
+    assert.deepEqual(fsm, {});
+    assert.equal(job, null);
+    assert.match(await s.nav('settings'), /Утренний отчёт выключен/);
+    assert.match(await s.press('🔔 Уведомления'), /Утренний отчёт выключен/);
+    const buttons = s.messages()[0].reply_markup.inline_keyboard.flat();
+    assert.ok(buttons.some(b => b.text === 'Подключить ежедневные отчёты'));
+    assert.ok(buttons.some(b => b.text === 'Изменить время'));
+    assert.ok(buttons.every(b => b.text !== 'Отключить уведомления'));
+  }
+});
+
+for (const [id, frequency] of [[169, 'daily'], [170, 'weekly'], [171, 'off']]) {
+  test('Настройки: изменение времени сохраняет частоту ' + frequency + ', дни и часовой пояс', async () => {
+    const s = session(id);
+    await seed([id], { frequency, weekdays: [4], zone: 'Europe/Moscow', privatePush: true });
+    if (frequency === 'off') await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
+    const before = await load(db, id);
+    await s.nav('notifications');
+    await s.press('Изменить время');
+    await s.press('🕒 Указать своё время');
+    const result = await s.receive('18:30');
+    assert.match(result, /Время отчёта сохранено/);
+    const after = await load(db, id);
+    assert.deepEqual(after.profile, { ...before.profile, clock: '18:30' });
+    if (frequency === 'off') {
+      assert.equal(after.job, null);
+      assert.match(result, /Утренний отчёт выключен/);
+      assert.doesNotMatch(result, /Следующий отчёт/);
+    } else {
+      assert.equal(after.job.slot, Date.parse('2026-03-' + (frequency === 'weekly' ? '12' : '10') + 'T15:30Z'));
+      assert.match(result, /Следующий отчёт/);
+    }
+    assert.match(await s.press('⚙️ Настройки уведомлений'), /18:30 · Москва/);
+    if (frequency === 'weekly') {
+      await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
+      assert.match(await s.nav('notifications'), /пока не запланирована/);
+    }
+  });
+}
+
+for (const [id, flag] of [[172, 'medicalHold'], [173, 'neutral'], [174, 'trackingPaused']]) {
+  test('Медицинская пауза ' + flag + ': время и приватность сохраняются без создания задания', async () => {
+    const s = session(id);
+    await seed([id], { frequency: 'off', ...(flag === 'neutral' ? {} : { [flag]: true }) });
+    await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
+    if (flag === 'neutral') await statement('UPDATE users SET neutral=1 WHERE id=?', id).run();
+    await s.nav('notifications');
+    await s.press('Подключить ежедневные отчёты');
+    const result = await s.press('06:00');
+    assert.match(result, /Время отчёта сохранено[\s\S]*Автоматические отчёты на паузе[\s\S]*Ручной отчёт и статистика доступны/);
+    assert.doesNotMatch(result, /Следующий отчёт|подключён/);
+    s.findButton('📊 Мой прогресс');
+    s.findButton('⚕️ Медицинская помощь');
+    await s.nav('edit.push');
+    await s.press('Нейтральное сообщение');
+    await s.receive('/start');
+    const { profile, job, neutral } = await load(db, id);
+    assert.equal(profile.clock, '06:00');
+    assert.equal(profile.frequency, 'daily');
+    assert.equal(profile.privatePush, true);
+    assert.equal(neutral, flag === 'neutral');
+    assert.equal(Boolean(profile.medicalHold), flag !== 'neutral');
+    assert.equal(profile.trackingPaused, undefined);
+    assert.equal(job, null);
+    assert.match(await s.nav('notifications'), /Автоматические отчёты на паузе/);
+  });
+}
+
+test('Просмотр медицинской помощи без ответов о риске не устанавливает флаги и не меняет очередь', async () => {
+  const id = 175, s = session(id);
+  await seed([id]);
+  const before = await load(db, id);
+  await s.nav('physical');
+  await s.press('Главное меню');
+  await s.receive('/start');
+  const { job, neutral, profile } = await load(db, id);
+  assert.equal(neutral, false);
+  assert.equal(profile.medicalHold, undefined);
+  assert.deepEqual(job, before.job);
+  await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
+});
+
+test('Старый черновик v2.3.1 и повторное нажатие не меняют расписание', async () => {
+  const id = 176, s = session(id);
+  await register(s);
+  await statement('UPDATE users SET fsm=? WHERE id=?', '{"step":"notifyConfirm","token":"legacy","frequency":"daily","clock":"06:00"}', id).run();
+  assert.match(await s.receive({ callback: 'legacy:save' }), /Настройка устарела/);
+  assert.equal((await load(db, id)).profile.frequency, 'off');
+  await s.nav('edit.subscribe');
+  const button = { callback: s.findButton('09:00') };
+  const replies = await Promise.all([s.receive(button), s.receive(button)]);
+  assert.ok(replies.some(text => /Ежедневный отчёт подключён/.test(text)));
+  assert.ok(replies.some(text => /Кнопка устарела/.test(text)));
+  assert.equal((await load(db, id)).profile.clock, '09:00');
+  assert.equal((await get('SELECT count(*) AS n FROM delivery_jobs WHERE user_id=?', id)).n, 1);
+});
+
+test('После доставки сегодня новое время сразу планируется на следующий день', async () => {
+  const id = 177, s = session(id);
+  await seed([id]);
+  await statement("INSERT INTO delivery_receipts VALUES (?,'2026-03-10','sent',1,0,NULL)", id).run();
+  await s.nav('notifications');
+  await s.press('Изменить время');
+  assert.match(await s.press('09:00'), /Следующий отчёт: 11\.03\.2026, 09:00/);
+  assert.equal((await load(db, id)).job.slot, Date.parse('2026-03-11T09:00Z'));
+  await tick(env(), Date.parse('2026-03-10T09:00Z'), async (_, method, body) => {
+    assert.ok(method !== 'sendMessage' || body.chat_id !== id);
+  });
+  assert.equal((await get('SELECT count(*) AS n FROM delivery_receipts WHERE user_id=?', id)).n, 1);
+});
+
+test('/admin считает подписку на медицинской паузе отдельно от доступной доставки', async () => {
+  const id = 178, s = session(id);
+  await seed([id], { frequency: 'off', medicalHold: true });
+  await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
+  const counts = async () => {
+    const closed = { ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id), OWNER_IS_CLOSED_CHAT: '1' };
+    let out;
+    await webhook(request(id, '/admin'), closed, now, async (_, __, body) => { out = body.text; });
+    return [...out.matchAll(/: (\d+)/g)].map(match => Number(match[1]));
+  };
+  const before = await counts();
+  await s.nav('edit.subscribe');
+  await s.press('06:00');
+  const after = await counts();
+  assert.deepEqual(after, [before[0], before[1], before[2] + 1, 0]);
+  assert.equal(await get('SELECT 1 FROM delivery_jobs WHERE user_id=?', id), null);
+});
+
+test('При открытом эпизоде время сохраняется без обещания отправки', async () => {
+  const id = 179, s = session(id);
+  await seed([id]);
+  await db.batch([
+    statement('INSERT INTO episodes(id,user_id,start) VALUES(?,?,?)', id, id, now - DAY),
+    statement('UPDATE abstinence_intervals SET end=? WHERE user_id=?', now - DAY, id),
+    statement('DELETE FROM delivery_jobs WHERE user_id=?', id)
+  ]);
+  await s.nav('notifications');
+  await s.press('Изменить время');
+  const result = await s.press('06:00');
+  assert.match(result, /Время отчёта сохранено[\s\S]*Пока открыт эпизод употребления/);
+  assert.doesNotMatch(result, /Следующий отчёт/);
+  const { profile, job } = await load(db, id);
+  assert.equal(profile.clock, '06:00');
+  assert.equal(profile.frequency, 'daily');
+  assert.equal(job, null);
 });
 
 test('200 синтетических профилей, общий слот, конкурирующий Cron и параллельные обновления', async t => {

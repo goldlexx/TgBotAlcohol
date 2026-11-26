@@ -5,12 +5,13 @@ import { achievements, MILESTONES } from './calculations.js';
 import { drinkName, drinks, volume } from './habits.js';
 import { habitDraft, habitPrompt, handleHabit } from './habit-dialog.js';
 import { slotFor } from './schedule.js';
-import { hasMedicalRisk, preview, symptoms, riskHistory, risk } from './safety.js';
-import { back, helpButtons, metricOptions, nav, reportMetrics, screen, sections, view, welcome, reportPause } from './views.js';
+import { preview, symptoms, riskHistory, risk } from './safety.js';
+import { back, helpButtons, metricOptions, nav, reportMetrics, screen, sections, view, welcome, reportPause, reportSaved } from './views.js';
 
 export const keys = new Map(sections.flat().map(([text, route]) => [text, route]));
 export const defaults = { goal: null, frequency: 'off', weekdays: [1], clock: '08:00', content: 'both', privatePush: false };
 const weekdays = 'Пн Вт Ср Чт Пт Сб Вс'.split(' ');
+const reportTimes = ['06:00', '07:00', '08:00', '09:00', '10:00', '12:00'];
 const contents = [['Факт о здоровье', 'fact'], ['Идея для жизни', 'idea'], ['Оба', 'both'], ['Только статистика', 'numbers']];
 const episodeModes = ['active', 'complete', 'correct', 'remove'];
 
@@ -28,7 +29,10 @@ function prompt(state, now, correction = '') {
   if (f.step?.startsWith('habit.')) return habitPrompt(f, correction);
   const b = (text, action) => ({ text, callback_data: f.token + ':' + action });
   const origin = f.flow === 'new' ? 'menu' : episodeModes.includes(f.flow) ? 'history' : 'settings';
-  const form = (text, ...rows) => screen(text + (correction ? '\n\n' + correction : ''), ...rows, [nav('Отмена', 'cancel.' + origin)]);
+  const cancel = f.step?.startsWith('report')
+    ? b(f.flow === 'onboard' && f.step === 'reportTime' ? 'Не сейчас' : 'Отмена', 'cancel')
+    : nav('Отмена', 'cancel.' + origin);
+  const form = (text, ...rows) => screen(text + (correction ? '\n\n' + correction : ''), ...rows, [cancel]);
   const prev = [b('Назад', 'back')];
   switch (f.step) {
     case 'check': return form('🛡 **Перед началом**\n\n' + symptoms + '\n\nПодробнее о данных в /privacy.',
@@ -63,25 +67,28 @@ function prompt(state, now, correction = '') {
       [b('Первое', '1'), b('Второе', '2')], [b('Не помню точное время', 'day')], prev);
     case 'goal': return form('🎯 **Моя цель**\n\nПосле достижения цели счётчик продолжит работать.',
       [b('7 дней', '7'), b('30 дней', '30'), b('90 дней', '90')], [b('Без конечной цели', 'none')]);
-    case 'notify': return form('🔔 **Утренний отчёт**\n\nВыбери удобную частоту и время.',
-      [b('Каждый день в 08:00', 'daily8')], [b('Другая частота или время', 'custom')], [b('Выключить', 'off')]);
-    case 'frequency': return form('📆 **Дни уведомлений**\n\nКак часто присылать отчёт?',
+    case 'reportFrequency': return form('📆 **Дни уведомлений**\n\nКак часто присылать отчёт?',
       [b('Каждый день', 'daily')], [b('В выбранные дни недели', 'selected')],
-      [b('Только на рубежах', 'milestones')], prev);
-    case 'weekdays': return form('📆 **Выбери дни недели**',
+      [b('Только на рубежах', 'milestones')]);
+    case 'reportDays': return form('📆 **Выбери дни недели**',
       weekdays.slice(0, 4).map((d, i) => b((f.weekdays.includes(i + 1) ? '✓ ' : '') + d, String(i + 1))),
       weekdays.slice(4).map((d, i) => b((f.weekdays.includes(i + 5) ? '✓ ' : '') + d, String(i + 5))), [b('Готово', 'next')], prev);
-    case 'clock': return form('🕒 **Время отчёта**\n\nВведи местное время, например 08:00.', [b('08:00', 'default')], prev);
+    case 'reportTime': {
+      const connecting = state.profile.frequency === 'off' && f.frequency;
+      const title = connecting && f.frequency === 'daily' ? 'Ежедневный отчёт' : 'Время отчёта';
+      const intro = connecting ? 'Выбери время, чтобы подключить отчёт о своём прогрессе.' : 'Выбери удобное время.';
+      const zone = '🌍 Часовой пояс: ' + zoneLabel(state.profile.zone, now);
+      const pause = reportPause(state);
+      return form('🔔 **' + title + '**\n\n' + intro + '\n\n' + zone + '\n\nВремя всегда можно изменить в настройках.' +
+        (pause ? '\n\n' + pause : '') + (connecting ? '\n\n' + preview : ''),
+      reportTimes.slice(0, 3).map(time => b(time, time)), reportTimes.slice(3).map(time => b(time, time)),
+      [b('🕒 Указать своё время', 'custom')], f.returnStep ? prev : []);
+    }
+    case 'reportTimeText': return form('🕒 **Укажи время отчёта**\n\nВведи время по местному поясу, например 6:00 или 18:30.', prev);
     case 'content': return form('🔔 **Содержание отчёта**\n\nСтатистика есть в обычном отчёте. Выбери, что ещё добавить.',
       ...contents.map(([title, key]) => [b(title, key)]));
     case 'push': return form('🔐 **Формат превью**\n\nНейтральное сообщение содержит только фразу «Твой отчёт готов».',
       [b('Обычный отчёт', 'normal')], [b('Нейтральное сообщение', 'private')]);
-    case 'notifyConfirm': {
-      const paused = reportPause({ ...state, profile: { ...state.profile, frequency: f.frequency, weekdays: f.weekdays } });
-      return form('🔔 **Подтверди расписание**\n\nВыбранное время — ' + f.clock + ' по местному времени.' +
-        (paused ? '\n\n' + paused : state.profile.frequency === 'off' ? '\n\n' + preview : ''),
-        [b(!paused && state.profile.frequency === 'off' ? 'Включить отчёты' : 'Сохранить', 'save')], prev);
-    }
     case 'episode': return form('☀️ **Твой путь продолжается**\n\nОдин эпизод употребления не перечёркивает предыдущие успехи. История, трезвые дни и ранее полученные достижения сохраняются.',
       [b('Употребление завершилось', 'complete')], [b('Эпизод продолжается', 'active')], ...helpButtons.map(b => [b]));
     case 'episodeConfirm': return form('📅 **Проверь запись**\n\nСохранить ' + (f.flow === 'correct' ? 'исправление истории' : 'эпизод употребления') + '?' +
@@ -112,10 +119,28 @@ function planTimeline(state, id, now, base, episodes) {
 function extendable(state, base) {
   return base && base.ms < state.profile.base.ms && state.habits[0]?.effective === state.profile.base.ms;
 }
-function settingsSaved(state, id, now, route = 'settings') {
+function saveSettings(state, id, now) {
   finish(state);
-  reschedule(state, id, slotFor(state, now));
+  let slot = slotFor(state, now);
+  while (slot !== null && state.reportedDays?.includes(today(slot, state.profile.zone))) {
+    slot = slotFor(state, now, today(slot, state.profile.zone));
+  }
+  reschedule(state, id, slot);
+}
+
+function settingsSaved(state, id, now, route = 'settings') {
+  saveSettings(state, id, now);
   return view(route, state, now, id);
+}
+
+function saveReportTime(state, id, now, clock) {
+  const { frequency, weekdays } = state.fsm;
+  const connecting = state.profile.frequency === 'off' && frequency;
+  state.profile.clock = clock;
+  if (frequency) state.profile.frequency = frequency;
+  if (frequency === 'selected') state.profile.weekdays = weekdays;
+  saveSettings(state, id, now);
+  return reportSaved(state, now, connecting);
 }
 
 function finishDate(state, id, now, date) {
@@ -124,11 +149,9 @@ function finishDate(state, id, now, date) {
     state.profile = { ...defaults, zone: f.zone, historyZone: f.zone, base: date,
       ...(state.neutral ? { medicalHold: true } : {}) };
     planTimeline(state, id, now, date, []);
-    finish(state);
+    enter(state, 'reportTime', { flow: 'onboard', frequency: 'daily' });
     return { ...view('progress.new', state, now, id), keyboard: true,
-      followup: hasMedicalRisk(state) ? null : screen('Хочешь дополнить свой прогресс расчётом экономии или включить отчёты?',
-        [nav('💰 Настроить статистику', 'edit.habit')], [nav('🔔 Настроить утренние отчёты', 'edit.notify')],
-        [nav('📊 Мой прогресс', 'progress')]) };
+      followup: prompt(state, now) };
   }
   if (f.dateRole === 'base') enter(state, 'episodeConfirm', { ...f, base: date });
   if (f.dateRole === 'start') {
@@ -189,8 +212,7 @@ function saveEpisode(state, id, now, f) {
     else state.writes.push(['INSERT INTO episodes(id,user_id,start,last,precision) VALUES (?,?,?,?,?)',
       episode.id, id, episode.start, episode.last, episode.precision]);
   }
-  finish(state);
-  reschedule(state, id, slotFor(state, now));
+  saveSettings(state, id, now);
   return episode?.last === null
     ? screen('☀️ **Твой путь продолжается**\n\nСерия и обычные уведомления на паузе.',
       [nav('Употребление завершилось', 'episode.time')], ...helpButtons.map(b => [b]), back('progress'))
@@ -218,6 +240,10 @@ function formAction(state, id, now, action, updateId) {
     return prompt(state, now);
   };
   const finishKnownDay = () => finishDate(state, id, now, parseDate(f.dateDay, f.zone, now, 'day'));
+  if (action === 'cancel' && f.step.startsWith('report')) {
+    finish(state);
+    return view(f.flow === 'onboard' ? 'progress' : 'notifications', state, now, id);
+  }
   switch (f.step) {
     case 'check':
       if (action === 'urgent') { flagMedicalRisk(state, id); return go('paused'); }
@@ -270,28 +296,29 @@ function formAction(state, id, now, action, updateId) {
         return settingsSaved(state, id, now);
       }
       break;
-    case 'notify':
-      if (action === 'daily8') return go('notifyConfirm', { ...f, frequency: 'daily', clock: '08:00', quick: true });
-      if (action === 'custom') return go('frequency', { ...f, quick: false });
-      if (action === 'off') { state.profile.frequency = 'off'; return settingsSaved(state, id, now, 'notifications'); }
-      break;
-    case 'frequency':
-      if (action === 'back') return go('notify');
+    case 'reportFrequency':
       if (['daily', 'selected', 'milestones'].includes(action)) {
-        return go(action === 'selected' ? 'weekdays' : 'clock', { ...f, frequency: action });
+        const selected = action === 'selected';
+        return go(selected ? 'reportDays' : 'reportTime', {
+          ...f, frequency: action, returnStep: selected ? 'reportDays' : 'reportFrequency'
+        });
       }
       break;
-    case 'weekdays':
-      if (action === 'back') return go('frequency');
-      if (action === 'next' && f.weekdays.length) return go('clock');
+    case 'reportDays':
+      if (action === 'back') return go('reportFrequency');
+      if (action === 'next' && f.weekdays.length) return go('reportTime');
       if (/^[1-7]$/.test(action)) {
         const day = Number(action);
-        return go('weekdays', { ...f, weekdays: f.weekdays.includes(day) ? f.weekdays.filter(d => d !== day) : [...f.weekdays, day] });
+        return go('reportDays', { ...f, weekdays: f.weekdays.includes(day) ? f.weekdays.filter(d => d !== day) : [...f.weekdays, day] });
       }
       break;
-    case 'clock':
-      if (action === 'back') return go(f.frequency === 'selected' ? 'weekdays' : 'frequency');
-      if (action === 'default') return go('notifyConfirm', { ...f, clock: '08:00' });
+    case 'reportTime':
+      if (action === 'back' && f.returnStep) return go(f.returnStep);
+      if (action === 'custom') return go('reportTimeText');
+      if (reportTimes.includes(action)) return saveReportTime(state, id, now, action);
+      break;
+    case 'reportTimeText':
+      if (action === 'back') return go('reportTime');
       break;
     case 'content':
       if (contents.some(([, key]) => key === action)) {
@@ -302,13 +329,6 @@ function formAction(state, id, now, action, updateId) {
     case 'push':
       if (['private', 'normal'].includes(action)) {
         state.profile.privatePush = action === 'private';
-        return settingsSaved(state, id, now, 'notifications');
-      }
-      break;
-    case 'notifyConfirm':
-      if (action === 'back') return go(f.quick ? 'notify' : 'clock');
-      if (action === 'save') {
-        for (const key of ['frequency', 'weekdays', 'clock']) state.profile[key] = f[key];
         return settingsSaved(state, id, now, 'notifications');
       }
       break;
@@ -378,10 +398,10 @@ function formText(state, id, now, value) {
       if (!validClock(clock)) throw new Error('clock');
       return readTime(f.dateDay, clock);
     }
-    case 'clock': {
+    case 'reportTimeText': {
       const clock = clockInput(value);
-      if (!validClock(clock)) throw new Error('clock');
-      return go('notifyConfirm', { clock });
+      if (!validClock(clock)) throw new Error('reportClock');
+      return saveReportTime(state, id, now, clock);
     }
     default: return f.step ? prompt(state, now, 'Воспользуйся кнопками.') : view('menu', state, now, id);
   }
@@ -452,7 +472,10 @@ function routeTo(state, id, now, route) {
     }
     case 'edit':
       if (!p) return welcome;
-      if (arg === 'notify') return start('notify', { ...defaults, ...p, weekdays: validWeekdays(p.weekdays) ? p.weekdays : [], flow: 'edit' });
+      if (arg === 'notify') return start('reportFrequency', { weekdays: validWeekdays(p.weekdays) ? p.weekdays : [], flow: 'edit' });
+      if (arg === 'clock') return start('reportTime', { flow: 'edit' });
+      if (arg === 'subscribe') return p.frequency === 'off'
+        ? start('reportTime', { flow: 'edit', frequency: 'daily' }) : view('notifications', state, now, id);
       if (['goal', 'zone', 'content', 'push'].includes(arg)) return start(arg, { flow: 'edit' });
       if (['habit', 'budget', 'mode'].includes(arg)) return start(arg === 'mode' ? 'habit.mode' : 'habit.home', habitDraft(state.habits.at(-1)));
       break;
@@ -464,7 +487,13 @@ export function dialog(state, { id, text, callback, updateId }, now) {
   const command = text?.match(/^\/(start|help|privacy|delete|morning)(?:@[A-Za-z0-9_]+)?(?:\s|$)/)?.[1];
   if (command || keys.has(text)) return routeTo(state, id, now, command ?? keys.get(text));
   if (callback?.startsWith('n:')) return routeTo(state, id, now, callback.slice(2));
-  if (callback && (!state.fsm.token || !callback.startsWith(state.fsm.token + ':'))) return screen('Кнопка устарела. Открой нужный раздел снова.', back());
+  if (callback && (!state.fsm.token || !callback.startsWith(state.fsm.token + ':'))) {
+    return screen('Кнопка устарела. Открой нужный раздел снова.', back());
+  }
+  if (['notify', 'frequency', 'weekdays', 'clock', 'notifyConfirm'].includes(state.fsm.step)) {
+    finish(state);
+    return screen('Настройка устарела. Открой раздел уведомлений снова.', [nav('Уведомления', 'notifications')]);
+  }
   const action = callback?.slice(state.fsm.token.length + 1);
   try {
     if (state.fsm.step?.startsWith('habit.')) {
@@ -488,6 +517,7 @@ export function dialog(state, { id, text, callback, updateId }, now) {
     const stage = state.fsm.step;
     const messages = {
       zone: 'Часовой пояс не найден. Выбери город из списка или попробуй другое название.',
+      reportClock: 'Укажи время от 00:00 до 23:59, например 6:00 или 18:30.',
       gap: 'При переводе часов такого местного времени не было. Укажи другое время.',
       future: 'Укажи дату и время, которые уже наступили, или выбери «Сейчас».',
       overlap: 'Даты пересекаются или идут в неверном порядке. Уточни их через «Изменить» или начни ввод заново.'

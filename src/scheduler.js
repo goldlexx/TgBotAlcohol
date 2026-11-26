@@ -1,13 +1,12 @@
 import { first, guard, load, saveAwards, stmt } from './storage.js';
 import { achievements, reached } from './calculations.js';
-import { slotFor } from './schedule.js';
+import { FRESH, slotFor } from './schedule.js';
 import { report } from './views.js';
 import { DAY, today, hasReportDays } from './time.js';
 import { hasMedicalRisk } from './safety.js';
 import { allowed, message, telegram, TelegramError } from './telegram.js';
 
 export const BATCH = 8;
-const FRESH = 45 * 60_000;
 
 async function deliver(env, job, now, api) {
   const db = env.DB, id = job.user_id;

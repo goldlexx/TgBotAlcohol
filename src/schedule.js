@@ -2,6 +2,8 @@ import { MILESTONES } from './calculations.js';
 import { hasMedicalRisk } from './safety.js';
 import { DAY, nextReport } from './time.js';
 
+export const FRESH = 45 * 60_000;
+
 export function slotFor(state, now, afterDay = null) {
   const p = state.profile;
   const period = state.intervals.at(-1);

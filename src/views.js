@@ -5,6 +5,7 @@ import { calculate, MILESTONES } from './calculations.js';
 import { digits, drinkName, formatMoney, hasCalendarBudget, volume } from './habits.js';
 import { DAY, displayTime, hasReportDays, observation, today, zoneLabel } from './time.js';
 import { emergency, hasMedicalRisk, risk, symptoms, privacy } from './safety.js';
+import { FRESH } from './schedule.js';
 
 export const sections = [
   [['📊 Мой прогресс', 'progress'], ['🆘 Хочу выпить', 'craving']],
@@ -54,7 +55,8 @@ const openEpisode = state => state.episodes.at(-1)?.last === null;
 export function reportPause(state) {
   const reason = hasMedicalRisk(state) ? 'Из-за возможного медицинского риска.'
     : openEpisode(state) ? 'Пока открыт эпизод употребления.'
-      : state.profile && !hasReportDays(state.profile) ? 'Дни прежнего расписания неизвестны. Выбери дни заново.' : '';
+      : state.profile && !hasReportDays(state.profile) ? 'Дни прежнего расписания неизвестны. Выбери дни заново.'
+        : state.profile && state.profile.frequency !== 'off' && state.intervals.at(-1)?.end !== null ? 'Нет активного периода отслеживания.' : '';
   return reason ? '**Автоматические отчёты на паузе.** ' + reason + ' Ручной отчёт и статистика доступны.' : '';
 }
 const series = stats => '**' + duration(stats.current) + ' без алкоголя**';
@@ -195,6 +197,37 @@ function paginate(rows, page, route, size = 5) {
   return { rows: rows.slice(page * size, (page + 1) * size), buttons };
 }
 const freq = { off: 'выключен', daily: 'ежедневно', selected: 'по выбранным дням', weekly: 'еженедельно', milestones: 'на рубежах' };
+
+function reportStatus(state, now) {
+  const p = state.profile;
+  const pause = reportPause(state);
+  const job = state.job;
+  const planned = p.frequency !== 'off' && !pause && job && job.next_due_at >= now &&
+    job.next_due_at - job.slot <= FRESH && !state.reportedDays?.includes(today(job.slot, p.zone));
+  const next = planned ? '📅 Следующий отчёт: ' + displayTime(job.next_due_at, p.zone) + '.' : '';
+  const details = pause || next || (p.frequency !== 'off' ? 'Ближайшая отправка пока не запланирована.' : '');
+  return {
+    planned,
+    next,
+    text: [
+      p.frequency === 'off' ? 'Утренний отчёт выключен.' : 'Расписание: ' + freq[p.frequency] + ' в ' + p.clock + '.',
+      details
+    ].filter(Boolean).join('\n')
+  };
+}
+
+export function reportSaved(state, now, connecting) {
+  const p = state.profile;
+  const { planned, next, text } = reportStatus(state, now);
+  const title = connecting && planned
+    ? '✅ **' + (p.frequency === 'daily' ? 'Ежедневный отчёт подключён' : 'Отчёты подключены') + '**'
+    : '🔔 **Время отчёта сохранено**';
+  const daily = connecting && planned && p.frequency === 'daily';
+  const clock = daily ? 'Каждый день в ' + p.clock : p.clock;
+  return screen(title + '\n\n🕒 ' + clock + ' · ' + zoneLabel(p.zone, now) + '\n\n' + (daily ? next : text),
+    hasMedicalRisk(state) ? [nav('📊 Мой прогресс', 'progress'), nav('⚕️ Медицинская помощь', 'help')]
+      : [nav('⚙️ Настройки уведомлений', 'notifications'), nav('Главное меню', 'menu')]);
+}
 const cause = { work: '💼 После работы', company: '👥 В компании', stress: '😟 Стресс', habit: '🔄 Скука или привычка' };
 const causeTitle = { work: '💼 Вечер после работы', company: '👥 Тяга в компании', stress: '😟 Напряжённый момент', habit: '🔄 Меняем привычный ритуал' };
 const noteEpisode = nav('📝 Отметить эпизод', 'episode');
@@ -225,11 +258,12 @@ export function view(route, state, now, id) {
       '\n\n**Взаимопомощь**\nАА · поиск встреч · https://www.aa.org/faq/how-can-i-find-meeting-information' +
       '\nГруппы могут дать поддержку. При симптомах обратись за медицинской помощью.\n\nСсылки проверены 25.11.2026.',
       [helpButtons[1]], menuButton), readOnly: true };
-    case 'privacy': return screen('🔐 **Мои данные**\n\n' + privacy, [p && offButton(state), nav('Удалить данные', 'delete')].filter(Boolean), back(p ? 'settings' : 'menu'));
+    case 'privacy': return screen('🔐 **Мои данные**\n\n' + privacy,
+      [p && p.frequency !== 'off' && offButton(state), nav('Удалить данные', 'delete')].filter(Boolean), back(p ? 'settings' : 'menu'));
     case 'morning': return { ...report(state, now, id, day, { automatic: arg === 'preview' }), readOnly: true };
     case 'progress': {
       if (!p) return screen('☀️ **Мой прогресс**\n\nНачни отслеживание, чтобы видеть свой прогресс.', [nav('☀️ Начать', 'begin')], helpButtons);
-      return { ...screen((arg === 'new' ? '☀️ **Твой путь начался!**' : '☀️ **Мой прогресс**') + '\n\n' + progressText(state, stats, arg === 'new' ? 'onboarding' : 'progress'),
+      return { ...screen('☀️ **Мой прогресс**\n\n' + progressText(state, stats, arg === 'new' ? 'onboarding' : 'progress'),
         [nav('📊 Подробная статистика', 'details')], [nav('📅 История', 'history'), nav('ℹ️ Как считаем', 'method.progress')],
         openEpisode(state) ? [nav('Завершить эпизод', 'episode.time')] : [noteEpisode]), accrueAwards: true };
     }
@@ -282,7 +316,7 @@ export function view(route, state, now, id) {
         '📊 Прежняя привычка: ' + (summary.length ? summary.slice(0, 4).join(', ') + period + (summary.length > 4 ? ' и другие' : '') : 'напитки не указаны'),
         '💰 Расходы: ' + (spend === null ? 'не указаны' : '≈' + formatMoney(spend, h.currency, true) + period +
           (h.budget === null && !calendarBudget && costs.length < h.items.length ? ' (частично)' : '')),
-        '🔔 Утренний отчёт: ' + freq[p.frequency] + (p.frequency === 'off' ? '' : ' в ' + p.clock),
+        '🔔 ' + reportStatus(state, now).text,
         '🌍 Часовой пояс: ' + zoneLabel(p.zone, now), '🎯 Цель: ' + (p.goal ? label(p.goal) : 'без ограничений')
       ].join('\n'),
       [nav('📅 Дата и история', 'history')],
@@ -300,11 +334,12 @@ export function view(route, state, now, id) {
       [nav('Как считаем', 'method.settings'), nav('Мои данные', 'privacy')], back('settings'));
     case 'notifications':
       if (!p) return welcome;
-      return screen('🔔 **Уведомления**\n\nУтренний отчёт: ' + freq[p.frequency] + (p.frequency === 'off' ? '' : ' в ' + p.clock) +
-        (reportPause(state) ? '\n\n' + reportPause(state) : '') +
+      return screen('🔔 **Уведомления**\n\n' + reportStatus(state, now).text +
+        '\n\n🕒 Время: ' + p.clock + ' · ' + zoneLabel(p.zone, now) +
         '\nСодержание: ' + contentNames[p.content ?? 'both'] +
         '\nПревью: ' + (p.privatePush ? 'Твой отчёт готов' : 'обычный отчёт') + '\n\nКоманда /morning открывает отчёт вручную.',
-      [nav(p.frequency === 'off' ? 'Включить отчёты' : 'Частота и время', 'edit.notify')],
+      p.frequency === 'off' ? [nav('Подключить ежедневные отчёты', 'edit.subscribe')] : [],
+      [nav('Изменить время', 'edit.clock'), nav(p.frequency === 'off' ? 'Другая частота' : 'Изменить частоту', 'edit.notify')],
       [nav('Содержание', 'edit.content'), nav('Формат превью', 'edit.push')],
       p.frequency === 'off' ? [] : [offButton(state)], [nav('Открыть отчёт', 'morning'), nav('Превью', 'morning.preview')], back('settings'));
     case 'history': {
