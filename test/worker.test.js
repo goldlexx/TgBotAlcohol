@@ -183,10 +183,13 @@ test('Регистрация, /start без сброса, контент, цел
   assert.match(await s.nav('progress'), /1[\s\u00a0]808/);
   assert.match(await s.nav('life'), /Жизнь без алкоголя/);
   assert.match(await s.press('🔄 Другая идея'), /Жизнь без алкоголя/);
-  assert.match(await s.nav('recovery'), /ориентиры/);
-  await s.press('ℹ️ Методика и источники');
-  assert.match(await s.press('🔬 Научные источники'), /Выбери публикацию/);
+  assert.match(await s.nav('recovery'), /Общие ориентиры/);
+  assert.match(await s.press('📅 Все этапы восстановления'), /Этапы восстановления/);
+  assert.match(await s.press('Назад'), /Восстановление организма/);
+  assert.match(await s.press('🔬 Подробнее и источники'), /Выбери тему/);
+  assert.match(await s.press('Энергия'), /Кого изучали/);
   assert.ok(s.messages()[0].reply_markup.inline_keyboard.flat().some(button => button.url?.startsWith('https://')));
+  assert.match(await s.press('Главное меню'), /Мой прогресс/);
   assert.match(await s.nav('awards'), /3 из 12/);
   await s.nav('edit.zone');
   await s.press(/^Москва /);

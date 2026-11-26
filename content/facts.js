@@ -5,13 +5,13 @@ export const sources = {
   craving: ['Поддержка', 'NIAAA · Как справляться с тягой', 'https://rethinkingdrinking.niaaa.nih.gov/tools/worksheets-more/how-stop-alcohol-cravings'],
   refusal: ['Поддержка', 'NIAAA · Как отказаться в компании', 'https://rethinkingdrinking.niaaa.nih.gov/tools/worksheets-more/building-your-drink-refusal-skills'],
   mehta: ['Здоровье', 'Mehta et al. · Давление, обмен веществ и вес', 'https://discovery.ucl.ac.uk/10048446/1/e020673.full.pdf'],
-  powell: ['Здоровье', 'Powell et al. · Когнитивные функции', 'https://pmc.ncbi.nlm.nih.gov/articles/PMC10760842/'],
+  powell: ['Здоровье', 'Powell и соавт. · PLOS ONE', 'https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0296043'],
   iarc: ['Здоровье', 'IARC · Долгосрочные риски', 'https://www.iarc.who.int/faq/iarc-handbooks-of-cancer-prevention-volume-20a-reduction-or-cessation-of-alcohol-consumption/'],
-  facial: ['Здоровье', 'Goodman et al. · Употребление алкоголя и внешность', 'https://jcadonline.com/aging-august-2019/'],
+  facial: ['Здоровье', 'Goodman и соавт. · Внешность', 'https://pmc.ncbi.nlm.nih.gov/articles/PMC6715121/'],
   january: ['Здоровье', 'de Visser и Piper · Самочувствие участников «Сухого января»', 'https://pubmed.ncbi.nlm.nih.gov/32391879/'],
-  energySurvey: ['Здоровье', 'de Visser · Энергия и сон в опросе «Сухого января»', 'https://movendi.ngo/wp-content/uploads/2026/01/R.-de-Visser-Dry-January-evaluation-2018.pdf'],
+  energySurvey: ['Здоровье', 'de Visser и Lockwood · Опрос', 'https://movendi.ngo/wp-content/uploads/2026/01/R.-de-Visser-Dry-January-evaluation-2018.pdf'],
   parr: ['Здоровье', 'Parr et al. · Синтез мышечного белка после тренировки', 'https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0088384'],
-  karunakaran: ['Здоровье', 'Karunakaran и Michael · Эректильная функция', 'https://pubmed.ncbi.nlm.nih.gov/35236641/'],
+  karunakaran: ['Здоровье', 'Karunakaran и Michael · Клиническое наблюдение', 'https://academic.oup.com/jsm/article-abstract/19/4/581/6961281'],
   density: ['Расчёты', 'PubChem · Этанол', 'https://pubchem.ncbi.nlm.nih.gov/compound/Ethanol'],
   energy: ['Расчёты', 'EU 1169/2011 · Энергия этанола', 'https://www.legislation.gov.uk/eur/2011/1169/annex/XIV/2023-04-23/data.htm'],
   who: ['Здоровье', 'ВОЗ · Алкоголь', 'https://www.who.int/news-room/fact-sheets/detail/alcohol'],
@@ -25,36 +25,54 @@ export const sources = {
 };
 
 const populations = {
-  mehta: ['Взрослые с умеренным и высоким употреблением без зависимости', 'Наблюдательное исследование, около месяца, групповые значения'],
-  powell: ['Взрослые с расстройством, связанным с употреблением алкоголя', 'Обзор продольных исследований. Сроки, тесты и результаты различались'],
-  iarc: ['Люди, ранее употреблявшие алкоголь', 'Долгосрочные популяционные данные. Индивидуальная величина риска неизвестна'],
-  nhs: ['Люди с возможной алкогольной зависимостью', 'Справка о симптомах, без прогноза или оценки конкретного человека'],
-  facial: ['Взрослые женщины в четырёх странах', 'Поперечный опрос по самооценке, не проверял эффект отказа'],
-  january: ['Взрослые участники британского «Сухого января» и группа сравнения', 'Наблюдательная когорта, группы отличались изначально, самооценка'],
-  energySurvey: ['Участники британского «Сухого января» 2018 года', 'Опрос добровольцев, без рандомизации и объективного измерения сна или энергии'],
-  parr: ['Восемь физически активных мужчин', 'Малое перекрёстное исследование высокой дозы после одной тренировки, не измеряло долгосрочный результат'],
-  karunakaran: ['Мужчины с алкогольным расстройством и эректильной дисфункцией', 'Наблюдение в клинике, без контрольной группы, около трёх месяцев']
+  mehta: ['Взрослые с умеренным или высоким употреблением без зависимости и известной болезни печени',
+    'Наблюдение с группой сравнения. Участники сами выбирали, делать ли паузу. Снижение АЛТ и ГГТ не оценивает полное восстановление печени.',
+    'Один месяц', 'Short-term abstinence from alcohol and changes in cardiovascular risk factors, liver function tests and cancer-related growth factors'],
+  powell: ['Взрослые с расстройством, связанным с употреблением алкоголя',
+    'Систематический обзор продольных исследований. Тесты и результаты различались. Не везде были группы сравнения и объективная проверка воздержания.',
+    'Для многих функций улучшение наблюдалось в течение 6–12 месяцев. Сроки зависели от задачи.',
+    'Recovery of neuropsychological function following abstinence from alcohol in adults diagnosed with an alcohol use disorder'],
+  iarc: ['Люди, употреблявшие алкоголь', 'Популяционные данные. Личный риск и срок его снижения по ним определить нельзя.',
+    'Долгосрочные данные, единого срока нет', 'IARC Handbooks of Cancer Prevention, Volume 20A · Reduction or Cessation of Alcohol Consumption',
+    'IARC сочло доказательства снижения риска достаточными для рака полости рта и пищевода при прекращении или сокращении употребления.'],
+  nhs: ['Люди с возможной алкогольной зависимостью', 'Клиническая справка о симптомах и обращении за помощью.',
+    'Единого срока нет, это справка NHS', 'Alcohol-use disorder'],
+  facial: ['3 267 взрослых женщин в четырёх странах', 'Однократный опрос по самооценке. Влияние отказа от алкоголя не изучали.',
+    'Однократное измерение', 'Impact of Smoking and Alcohol Use on Facial Aging in Women'],
+  january: ['Взрослые участники британского «Сухого января» и группа сравнения',
+    'Наблюдение без случайного распределения. Группы отличались ещё до старта. Самочувствие оценивали сами участники.',
+    'Начало января, через месяц и через полгода', 'Short- and Longer-Term Benefits of Temporary Alcohol Abstinence During “Dry January” Are Not Also Observed Among Adult Drinkers in the General Population'],
+  energySurvey: ['Участники британского «Сухого января» 2018 года',
+    'Опрос добровольцев. Сон и энергию оценивали сами участники, в том числе те, кто пил в январе.',
+    'До начала, в конце января и через полгода', 'Evaluation of Dry January 2018'],
+  parr: ['Восемь физически активных мужчин',
+    'Малое перекрёстное исследование высокой дозы. Измеряли синтез белка, а не рост мышц.',
+    'Первые часы после одной тренировки', 'Alcohol Ingestion Impairs Maximal Post-Exercise Rates of Myofibrillar Protein Synthesis following a Single Bout of Concurrent Training'],
+  karunakaran: ['104 мужчины с алкогольным расстройством и эректильной дисфункцией',
+    'Наблюдение в одной клинике без контрольной группы. Вывод относится к этой группе.',
+    'Три месяца', 'The Impact of Abstinence From Alcohol on Erectile Dysfunction: A Prospective Follow up in Patients With Alcohol Use Disorder']
 };
 
 const established = [
-  ['sleep', 'nhs', null, 'Сон', 'При отмене алкоголя возможны трудности со сном. Если появились симптомы отмены, нужна медицинская оценка.'],
-  ['sleep-quality', 'energySurvey', null, 'Сон', 'К концу «Сухого января» участники опроса в среднем лучше оценивали свой сон.'],
-  ['energy', 'energySurvey', null, 'Энергия', 'К концу «Сухого января» участники опроса в среднем отмечали больше энергии.'],
-  ['pressure', 'mehta', 30, 'Давление', 'После месяца без алкоголя у участников исследования в среднем снизилось давление.'],
-  ['liver', 'mehta', 30, 'Печень', 'После месяца без алкоголя у участников улучшились показатели печени в анализах крови.'],
-  ['metabolism', 'mehta', 30, 'Обмен веществ', 'После месяца без алкоголя анализы показали, что организм участников в среднем лучше реагировал на инсулин.'],
-  ['weight', 'mehta', 30, 'Вес', 'После месяца без алкоголя вес участников исследования в среднем немного снизился.'],
-  ['wellbeing', 'january', null, 'Самочувствие', 'К концу «Сухого января» участники исследования в среднем лучше оценивали своё самочувствие.'],
-  ['activity', 'parr', null, 'Физическая активность', 'В небольшом эксперименте высокая доза алкоголя после тренировки замедляла синтез мышечного белка.'],
-  ['sexual', 'karunakaran', null, 'Сексуальное здоровье', 'Через три месяца без алкоголя большинство мужчин, которых наблюдали в клинике по поводу проблем с эрекцией, сообщили об улучшении.'],
-  ['appearance', 'facial', null, 'Внешность', 'В одном опросе женщин высокое употребление алкоголя было связано с более выраженной отёчностью под глазами.'],
-  ['memory', 'powell', null, 'Память', 'В исследованиях взрослых с алкогольной зависимостью результаты тестов памяти улучшались в течение месяцев без алкоголя. Срок зависел от задания.'],
-  ['attention', 'powell', null, 'Внимание', 'В исследованиях взрослых с алкогольной зависимостью результаты заданий на внимание улучшались в течение месяцев без алкоголя.'],
-  ['mouth', 'iarc', null, 'Полость рта', 'По оценке IARC, отказ от алкоголя или уменьшение употребления снижает долгосрочный риск рака полости рта.'],
-  ['esophagus', 'iarc', null, 'Пищевод', 'По оценке IARC, отказ от алкоголя или уменьшение употребления снижает долгосрочный риск рака пищевода.']
+  ['sleep', 'nhs', null, 'Сон в первые дни', 'При отмене алкоголя бывает трудно уснуть. Если появились симптомы отмены, нужна медицинская оценка.'],
+  ['sleep-quality', 'energySurvey', null, 'Сон', 'К концу «Сухого января» люди ставили своему сну более высокие оценки.'],
+  ['energy', 'energySurvey', null, 'Энергия', 'К концу «Сухого января» в анкетах люди отмечали, что у них прибавилось сил.'],
+  ['pressure', 'mehta', 30, 'Давление', 'За месяц без алкоголя давление может снизиться. Это наблюдали у взрослых без алкогольной зависимости.'],
+  ['liver', 'mehta', 30, 'Печень', 'Жизнь без алкоголя даёт печени передышку. За месяц снизились два печёночных показателя в крови у взрослых без зависимости и известной болезни печени.'],
+  ['metabolism', 'mehta', 30, 'Обмен веществ', 'После месяца без алкоголя анализы у взрослых без алкогольной зависимости указывали на лучшую реакцию на инсулин.'],
+  ['weight', 'mehta', 30, 'Вес', 'За месяц без алкоголя вес немного снизился в группе взрослых без алкогольной зависимости.'],
+  ['wellbeing', 'january', null, 'Самочувствие', 'Люди, завершившие «Сухой январь», лучше оценивали своё физическое и психологическое самочувствие.'],
+  ['activity', 'parr', null, 'Физическая активность', 'Большая доза алкоголя после тренировки мешает мышцам синтезировать белок. Это проверяли в первые часы после нагрузки.'],
+  ['sexual', 'karunakaran', null, 'Сексуальное здоровье', 'В одной клинике большинство мужчин с алкогольным расстройством и нарушением эрекции отметили улучшение после трёх месяцев без алкоголя.'],
+  ['appearance', 'facial', null, 'Внешность', 'В опросе женщин более высокое употребление алкоголя было связано с заметной отёчностью под глазами. У отёков бывают и другие причины.'],
+  ['memory', 'powell', null, 'Память', 'Память может улучшаться за месяцы без алкоголя. Это показали тесты у взрослых с расстройством, связанным с употреблением алкоголя.'],
+  ['attention', 'powell', null, 'Внимание', 'За месяцы без алкоголя взрослые с алкогольным расстройством лучше справлялись с некоторыми заданиями на внимание.'],
+  ['mouth', 'iarc', null, 'Полость рта', 'Отказ от алкоголя снижает долгосрочный риск рака полости рта.'],
+  ['esophagus', 'iarc', null, 'Пищевод', 'Отказ от алкоголя снижает долгосрочный риск рака пищевода.']
 ].map(([id, source_id, days, category, text]) => ({
   id, source_id, days, category, text, population: populations[source_id][0],
-  limitations: populations[source_id][1], text_version: 3, checked_at: '2026-11-24', clinical_status: 'pending'
+  limitations: populations[source_id][1], duration: populations[source_id][2], study: populations[source_id][3],
+  evidence: populations[source_id][4], text_version: 4, checked_at: '2026-11-26', clinical_status: 'pending'
 }));
 
 const preliminary = [
@@ -104,5 +122,16 @@ export const facts = [...established, ...preliminary].map(fact => ({
   icon: recoveryTopics[fact.id]
 }));
 const visible = fact => !fact.previewOnly || fact.clinical_status === 'approved';
-export const recoveryFacts = Object.keys(recoveryTopics).map(id => facts.find(fact => fact.id === id)).filter(visible);
+const recoveryReferences = { sleep: '😴', ...recoveryTopics, mouth: '🛡', esophagus: '🛡' };
+export const recoveryFacts = Object.entries(recoveryReferences)
+  .map(([id, icon]) => ({ ...facts.find(fact => fact.id === id), icon })).filter(visible);
+export const recoveryPeriods = [
+  [0, 'Первые сутки', ['sleep', 'liver']],
+  [1, 'Первые дни', ['sleep', 'liver']],
+  [7, 'Первые недели', ['liver', 'sleep-quality', 'pressure']],
+  [30, 'После первых 30 дней', ['liver', 'metabolism', 'wellbeing']],
+  [90, 'Несколько месяцев', ['memory', 'attention', 'liver']],
+  [180, 'Полгода и дальше', ['memory', 'attention', 'mouth']],
+  [365, 'Год и дольше', ['mouth', 'esophagus', 'memory']]
+];
 export const healthRotation = facts.filter(fact => fact.section !== 'risk' && visible(fact));

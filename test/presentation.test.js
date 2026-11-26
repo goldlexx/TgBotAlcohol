@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ideas, cravings, lifeLabels } from '../content/ideas.js';
-import { facts, healthRotation, recoveryFacts } from '../content/facts.js';
+import { facts, healthRotation, recoveryFacts, sources } from '../content/facts.js';
 import { awardCatalog } from '../content/achievements.js';
 import { DAY } from '../src/time.js';
 import { renderHtml } from '../src/telegram.js';
-import { bar, report, view } from '../src/views.js';
+import { bar, report, statsFor, view } from '../src/views.js';
 
 const now = Date.parse('2026-03-10T08:00Z');
 const state = { profile: { zone: 'UTC', historyZone: 'UTC' }, neutral: false, episodes: [], habits: [],
@@ -57,9 +57,8 @@ test('Все подборки проходят полный цикл без см
 
 test('Текст и клавиатуры отделяют медицинскую помощь от статистики и советов', () => {
   const recovery = view('recovery', state, now, 1).text;
-  assert.match(recovery, /группы людей/);
-  assert.match(recovery, /😴 \*\*Сон\*\*[\s\S]+❤️ \*\*Давление\*\*[\s\S]+🧠 \*\*Память\*\*/);
-  assert.doesNotMatch(recovery, /На этом этапе|Что может измениться дальше|180 дней/);
+  assert.match(recovery, /Общие ориентиры/);
+  assert.match(recovery, /🫀 \*\*Печень\*\*[\s\S]+😴 \*\*Сон\*\*[\s\S]+❤️ \*\*Давление\*\*/);
   const craving = view('craving', state, now, 1);
   assert.ok(craving.text.indexOf('физически плохо') < craving.text.indexOf('отложить решение'));
   assert.deepEqual(craving.buttons.slice(0, 2).map(row => row[0].callback_data), ['n:physical', 'n:emergency']);
@@ -114,15 +113,101 @@ test('Ротация проходит доступный набор до пов�
   }
 });
 
-test('Все страницы восстановления показывают только наблюдения о восстановлении, источники открываются кнопками', () => {
-  const sample = { ...state, closedTest: true };
-  const text = [0, 1, 2, 99].map(page => view('stages.' + page, sample, now, 1).text).join('\n');
-  for (const fact of recoveryFacts) assert.ok(text.includes(fact.text), fact.id);
-  for (const fact of facts.filter(entry => entry.section !== 'recovery')) assert.ok(!text.includes(fact.text), fact.id);
-  assert.doesNotMatch(text, /Предварительный материал|https?:\/\//);
-  const sources = view('sources.recovery', sample, now, 1);
-  assert.doesNotMatch(sources.text, /https?:\/\//);
-  assert.ok(sources.buttons.flat().some(button => button.url?.startsWith('https://')));
+test('Все карточки восстановления связаны со своими источниками и медицинским статусом', () => {
+  for (const [section, entries] of [['recovery', recoveryFacts], ['health', healthRotation]]) {
+    const routes = Array.from({ length: Math.ceil(entries.length / 5) }, (_, index) =>
+      view('sources.' + section + '.' + index, state, now, 1).buttons.flat()
+        .filter(button => button.callback_data?.startsWith('n:evidence.')).map(button => button.callback_data.slice(2))).flat();
+    assert.deepEqual(routes, entries.map(fact => 'evidence.' + fact.id + '.' + section));
+    for (const [index, route] of routes.entries()) {
+      const expected = entries[index];
+      const detail = view(route, state, now, 1);
+      assert.ok(detail.text.includes(expected.text) && detail.text.includes(expected.study));
+      assert.match(detail.text, /Кого изучали:[^\n]+\nСрок наблюдения:[^\n]+[\s\S]+Клиническая проверка: ожидается/);
+      assert.ok(detail.buttons.flat().some(button => button.url === sources[expected.source_id][2]));
+      assert.doesNotMatch(detail.text, /https?:\/\/|Предварительный материал/);
+    }
+  }
+  assert.match(view('evidence.mouth.recovery', state, now, 1).text, /IARC сочло доказательства снижения риска достаточными/);
+  assert.equal(view('evidence.new-memory.health', state, now, 1).text, view('sources.recovery', state, now, 1).text);
+});
+
+const seriesState = days => ({
+  ...state, intervals: [{ start: now - days * DAY, end: null, precision: 'minute' }]
+});
+
+test('Восстановление подбирает период серии и использует общую шкалу на всех рубежах', () => {
+  for (const [days, period] of [[0.5, 'Первые сутки'], [1, 'Первые дни'], [3, 'Первые дни'], [7, 'Первые недели'],
+    [14, 'Первые недели'], [23, 'Первые недели'], [30, 'После первых 30 дней'], [90, 'Несколько месяцев'],
+    [180, 'Полгода и дальше'], [365, 'Год и дольше'], [1000, 'Год и дольше'], [1825, 'Год и дольше']]) {
+    const sample = seriesState(days);
+    const before = statsFor(sample, now);
+    const recovery = view('recovery', sample, now, 1);
+    assert.ok(recovery.text.includes('📍 **' + period + '**'));
+    assert.ok(renderHtml(recovery.text).replace(/<\/?b>/g, '').length <= 700);
+    assert.doesNotMatch(recovery.text, /https?:\/\/|Предварительный материал|уже очистил|полностью восстановил|риск исчез|опасный период позади/i);
+    assert.deepEqual(statsFor(sample, now), before);
+    const comparison = view('progress', sample, now, 1).text.match(/🎯 Следующий рубеж — [\s\S]+?До рубежа — \*\*[^*]+\*\*/)?.[0];
+    if (comparison) {
+      assert.ok(recovery.text.includes(comparison));
+      assert.ok(view('morning', sample, now, 1).text.includes(comparison));
+    } else {
+      assert.match(recovery.text, /Все временные рубежи пройдены/);
+    }
+    assert.equal(recovery.buttons.flat().find(b => b.text === 'Главное меню').callback_data, 'n:menu');
+  }
+  assert.match(view('recovery', seriesState(23), now, 1).text, /Идёт четвёртая неделя[\s\S]+▰{6}▱{4} \*\*56%\*\*[\s\S]+\*\*7 дней\*\*/);
+  assert.match(view('recovery', seriesState(30 - 1000 / DAY), now, 1).text, /\*\*99%\*\*/);
+  assert.match(view('recovery', seriesState(30), now, 1).text, /60 дней[\s\S]+\*\*0%\*\*/);
+});
+
+test('Полная шкала листается по порядку и отмечает только пройденное время', () => {
+  const sample = seriesState(23);
+  const first = view('stages', sample, now, 1);
+  assert.match(first.text, /✅ Первые сутки[\s\S]+✅ 7 дней · 1 неделя\n📍 14 дней · 2 недели/);
+  const turn = (screen, label) => view(screen.buttons.flat().find(button => button.text === label).callback_data.slice(2), sample, now, 1);
+  const second = turn(first, '→');
+  assert.match(second.text, /⏳ 30 дней[\s\S]+⏳ 180 дней\n⏳ 365 дней · 1 год/);
+  assert.match(second.text, /30 дней — фиксированный отрезок/);
+  assert.deepEqual(turn(second, '←'), first);
+  const last = turn(second, '→');
+  assert.match(last.text, /⏳ 2 года[\s\S]+⏳ 5 лет/);
+  assert.ok(last.buttons.flat().some(button => button.text === '🛡 Долгосрочные преимущества'));
+  assert.deepEqual(last, view('stages.99', sample, now, 1));
+  assert.match(turn(last, 'Главное меню').text, /Мой прогресс/);
+  assert.match(view('stages.1', seriesState(30), now, 1).text, /📍 30 дней/);
+  assert.match(view('stages.1', seriesState(365), now, 1).text, /✅ 180 дней\n📍 365 дней/);
+});
+
+test('Восстановление сохраняет приоритет помощи и берёт серию после завершённого эпизода', () => {
+  const old = { start: now - 100 * DAY, end: now - 5 * DAY, precision: 'minute' };
+  const resumed = { ...seriesState(3), intervals: [old, ...seriesState(3).intervals],
+    episodes: [{ start: old.end, last: now - 3 * DAY }] };
+  assert.match(view('recovery', resumed, now, 1).text, /3 дня без алкоголя[\s\S]+Первые дни/);
+  assert.match(view('progress', resumed, now, 1).text, /Всего трезвых дней: \*\*96\*\*/);
+  const open = { ...resumed, intervals: [old], episodes: [{ start: old.end, last: null }] };
+  const paused = view('recovery', open, now, 1);
+  assert.match(paused.text, /Медицинская помощь[\s\S]+Серия на паузе[\s\S]+остаются в истории/);
+  assert.doesNotMatch(paused.text, /Следующий рубеж|0 часов без алкоголя/);
+  assert.doesNotMatch(view('stages', open, now, 1).text, /📍 Первые сутки/);
+  const medical = { ...seriesState(365), profile: { ...state.profile, medicalHold: true } };
+  assert.match(view('recovery', medical, now, 1).text, /Медицинская помощь[\s\S]+365 дней без алкоголя/);
+  assert.ok(view('recovery', medical, now, 1).buttons.flat().some(button => button.callback_data === 'n:emergency'));
+  assert.match(view('morning', medical, now, 1).text, /Медицинская помощь/);
+  assert.match(view('recovery', { ...state, intervals: [{ start: now + 1000, end: null }] }, now, 1).text, /ещё не начался/);
+  assert.match(view('recovery', { ...state, profile: null, intervals: [] }, now, 1).text, /Начни отслеживание/);
+});
+
+test('Факт дня и его источник сохраняются при изменении срока серии в течение дня', () => {
+  const day = '2026-03-10';
+  const sample = seriesState(7 - 1 / 24);
+  const fact = text => text.match(/Факт о здоровье\*\*\n\n([^\n]+)/)[1];
+  const first = report(sample, now, 1, day);
+  const later = report(sample, now + 2 * 3_600_000, 1, day);
+  assert.equal(fact(first.text), fact(later.text));
+  assert.deepEqual(first.buttons.at(-1), later.buttons.at(-1));
+  const destination = first.buttons.at(-1)[0].callback_data.slice(2);
+  assert.ok(view(destination, sample, now, 1).text.includes(fact(first.text)));
 });
 
 test('Пиво без данных об упаковке, крепкие напитки и склонение бокалов едины на трёх экранах', () => {
