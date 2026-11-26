@@ -416,7 +416,8 @@ function routeTo(state, id, now, route) {
     return prompt(state, now);
   };
   switch (page) {
-    case 'cancel': return view(['history', 'settings'].includes(arg) ? arg : 'menu', state, now, id);
+    case 'cancel': return ['habits', 'habitSettings'].includes(arg)
+      ? routeTo(state, id, now, arg) : view(['history', 'settings'].includes(arg) ? arg : 'menu', state, now, id);
     case 'start':
       return p ? { ...screen('☀️ **Счастье без алкоголя**'), keyboard: true, followup: view('progress', state, now, id) } : welcome;
     case 'begin': return p ? view('progress', state, now, id) : start('check', { flow: 'new' });

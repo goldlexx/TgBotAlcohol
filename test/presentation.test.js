@@ -157,6 +157,10 @@ test('Восстановление подбирает период серии и
     assert.equal(recovery.buttons.flat().find(b => b.text === 'Главное меню').callback_data, 'n:menu');
   }
   assert.match(view('recovery', seriesState(23), now, 1).text, /Идёт четвёртая неделя[\s\S]+▰{6}▱{4} \*\*56%\*\*[\s\S]+\*\*7 дней\*\*/);
+  for (const days of [1, 7, 23]) {
+    assert.match(view('recovery', seriesState(days), now, 1).text, /Впереди · ориентиры первого месяца[\s\S]+\*\*Печень\*\*/);
+  }
+  assert.doesNotMatch(view('recovery', seriesState(30), now, 1).text, /Впереди · ориентиры первого месяца/);
   assert.match(view('recovery', seriesState(30 - 1000 / DAY), now, 1).text, /\*\*99%\*\*/);
   assert.match(view('recovery', seriesState(30), now, 1).text, /60 дней[\s\S]+\*\*0%\*\*/);
 });
@@ -164,7 +168,8 @@ test('Восстановление подбирает период серии и
 test('Полная шкала листается по порядку и отмечает только пройденное время', () => {
   const sample = seriesState(23);
   const first = view('stages', sample, now, 1);
-  assert.match(first.text, /✅ Первые сутки[\s\S]+✅ 7 дней · 1 неделя\n📍 14 дней · 2 недели/);
+  assert.match(first.text, /✅ Первые сутки · начало серии\n✅ 1 день · рубеж в 24 часа[\s\S]+✅ 7 дней · 1 неделя\n📍 14 дней · 2 недели/);
+  assert.match(view('stages', seriesState(1), now, 1).text, /✅ Первые сутки · начало серии\n📍 1 день · рубеж в 24 часа/);
   const turn = (screen, label) => view(screen.buttons.flat().find(button => button.text === label).callback_data.slice(2), sample, now, 1);
   const second = turn(first, '→');
   assert.match(second.text, /⏳ 30 дней[\s\S]+⏳ 180 дней\n⏳ 365 дней · 1 год/);
@@ -206,8 +211,44 @@ test('Факт дня и его источник сохраняются при �
   const later = report(sample, now + 2 * 3_600_000, 1, day);
   assert.equal(fact(first.text), fact(later.text));
   assert.deepEqual(first.buttons.at(-1), later.buttons.at(-1));
+  assert.equal(first.buttons.at(-1)[0].text, '🔬 Подробнее и источники');
   const destination = first.buttons.at(-1)[0].callback_data.slice(2);
   assert.ok(view(destination, sample, now, 1).text.includes(fact(first.text)));
+});
+
+test('Медицинская помощь показывает первым действие при опасных симптомах и отделяет справочники', () => {
+  for (const route of ['physical', 'care']) {
+    const result = view(route, state, now, 1);
+    const html = renderHtml(result.text);
+    assert.match(html, /<b>Немедленно вызови скорую<\/b> при судорогах, галлюцинациях, сильной спутанности сознания или резком ухудшении\.\nВ России звони 112 или 103/);
+    assert.match(html, /\n\n<b>Обратись за медицинской оценкой сегодня<\/b>[\s\S]*дрожь, потливость, тошнота или сильная тревога/);
+    assert.match(html, /\n\n<b>Резкое прекращение употребления при зависимости может быть опасно\.<\/b>/);
+    assert.deepEqual(result.buttons[0].map(b => b.callback_data), ['n:emergency']);
+    assert.deepEqual(result.buttons.at(-1).map(b => b.callback_data), ['n:menu']);
+    assert.doesNotMatch(html, /https?:\/\//);
+  }
+  assert.equal(view('care', state, now, 1).buttons.flat().filter(b => b.url?.startsWith('https://')).length, 4);
+});
+
+test('Кнопки истории различают эпизоды одной даты и сохраняют полную дату', () => {
+  const date = Date.parse('2026-03-09T08:00Z');
+  const sample = { ...state, profile: { ...state.profile, base: { ms: now - 10 * DAY, precision: 'instant' } },
+    episodes: [{ id: 701, start: date, last: date + 1 }, { id: 702, start: date + 1000, last: null }] };
+  const history = view('history', sample, now, 1);
+  assert.match(history.text, /2\. 09\.03\.2026[\s\S]+1\. 09\.03\.2026/);
+  assert.match(history.text, /Нажми дату эпизода, чтобы исправить запись/);
+  assert.deepEqual(history.buttons.slice(0, 2).map(row => row.map(b => [b.text, b.callback_data])), [
+    [['2. 09.03.2026', 'n:correct.702'], ['Удалить 2', 'n:remove.702']],
+    [['1. 09.03.2026', 'n:correct.701'], ['Удалить 1', 'n:remove.701']]
+  ]);
+});
+
+test('Приватность скрывает отключение отчётов, когда подписка уже выключена', () => {
+  const sample = { ...state, user: { generation: 'fixture' } };
+  const hasOff = frequency => view('privacy', { ...sample, profile: { ...sample.profile, frequency } }, now, 1)
+    .buttons.flat().some(b => b.callback_data === 'n:off.fixture');
+  assert.equal(hasOff('off'), false);
+  assert.equal(hasOff('daily'), true);
 });
 
 test('Пиво без данных об упаковке, крепкие напитки и склонение бокалов едины на трёх экранах', () => {

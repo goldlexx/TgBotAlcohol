@@ -48,25 +48,27 @@ const fields = ['drink', 'freq', 'vol', 'abv', 'cost'];
 
 export function habitPrompt(f, error = '') {
   const b = (text, action) => ({ text, callback_data: f.token + ':' + action });
+  const origin = f.correction === undefined ? 'habitSettings' : 'habits';
+  const root = f.step === 'habit.home' || f.step === 'habit.mode' ||
+    (f.step === 'habit.review' && f.correction !== undefined);
   const form = (text, ...rows) => screen(text.replace(/^[^\n]+/, heading => '**' + heading + '**') +
     (error ? '\n\n' + error : ''), ...rows,
-    f.step === 'habit.home' || f.step === 'habit.mode' || (f.step === 'habit.review' && f.correction !== undefined)
-      ? back(f.correction === undefined ? 'settings' : 'habits') : [b('Назад', 'back')]);
+    root ? back(origin) : [b('Назад', 'back'), nav('Отмена', 'cancel.' + origin)]);
   const d = f.draft;
   switch (f.step.slice(6)) {
     case 'home': return form('💰 Твоя экономия\n\nСравни расходы и количество алкоголя с прежней привычкой.',
-      [b('📊 Настроить полную статистику', 'full')], [b('💰 Считать только деньги', 'money')],
+      [b('📊 Полная статистика', 'full')], [b('💰 Только деньги', 'money')],
       f.entries.length || f.budget !== null ? [b('✏️ Изменить сохранённое', 'review')] : [],
       f.entries.length || f.budget !== null ? [b('Отключить оценку', 'clear')] : [],
-      [nav('Настроить позже', 'progress'), nav('Исправить прошлую версию', 'habits')]);
+      [nav('Позже', 'progress')], [nav('Прошлые версии', 'habits')]);
     case 'mode': return form('💰 Расчёт экономии\n\nСредний расчёт прибавляет оценку постепенно. В календарном расчёте учитываются полные трезвые дни по прежнему графику.' +
       '\n\nДля новой модели укажи график и выбери источник расходов: общий бюджет или цены напитков. История сохранится.',
-      [b('Среднесуточный', 'average'), b('Календарный', 'calendar')]);
+      [b('По среднему', 'average'), b('Календарный', 'calendar')]);
     case 'drink': return form('🍽 Какой напиток был привычным?',
       ...pairs(Object.entries(drinks).map(([key, row]) => b(row[0], key))));
     case 'freq': return form('📆 Как часто в среднем?\n\n«По выходным» означает два раза за неделю для усреднённого расчёта.',
-      [b('Каждый день', 'daily'), b('Несколько раз в неделю', 'weekly')],
-      [b('По выходным', 'weekend'), b('Несколько раз в месяц', 'monthly')], [b('Указать самостоятельно', 'manual')]);
+      [b('Каждый день', 'daily'), b('По выходным', 'weekend')],
+      [b('Несколько раз в неделю', 'weekly')], [b('Несколько раз в месяц', 'monthly')], [b('Указать самостоятельно', 'manual')]);
     case 'freqPeriod': return form('📆 За какой период удобнее вспомнить частоту?',
       [b('За неделю', '7'), b('За 28 дней', '28')]);
     case 'count': return form('📆 Сколько раз обычно за ' + (d.period === 7 ? 'неделю' : '28 дней') + '?',
@@ -86,8 +88,8 @@ export function habitPrompt(f, error = '') {
     case 'currency': return form('💱 Выбери валюту. При смене валюты укажи расходы заново.\n\nМожно ввести код другой валюты.',
       [b('₽ Рубли', 'RUB'), b('€ Евро', 'EUR')], [b('$ Доллары США', 'USD'), b('£ Фунты', 'GBP')]);
     case 'budgetType': return form('💰 За какой период проще назвать расходы?\n\nОбщий бюджет заменит отдельные цены в этой версии.',
-      ...(f.mode === 'calendar' ? [] : [[b('За неделю', '7'), b('За месяц (28 дней)', '28')]]),
-      [b('За привычный день', 'once'), b('Другая валюта', 'currency')]);
+      ...(f.mode === 'calendar' ? [] : [[b('За неделю', '7'), b('За 28 дней', '28')]]),
+      [b('За привычный день', 'once')], [b('Другая валюта', 'currency')]);
     case 'budgetInput': return form('💰 Введи примерную сумму, например 1 200,50.',
       [b('Другая валюта', 'currency')]);
     case 'fields': return form('✏️ Что изменить?',

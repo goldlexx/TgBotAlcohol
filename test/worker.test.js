@@ -97,7 +97,7 @@ async function onboard(s, { notifications = false, habit = false } = {}) {
   const progress = await register(s);
   if (habit) {
     await s.nav('edit.habit');
-    await s.press('💰 Считать только деньги');
+    await s.press('💰 Только деньги');
     await s.press('За неделю');
     await s.receive('1 400,00 ₽');
     await s.press('✅ Сохранить');
@@ -176,6 +176,7 @@ test('Регистрация, /start без сброса, контент, цел
   const [menu, progress] = s.messages();
   assert.equal(s.messages().length, 2);
   assert.equal(menu.reply_markup.keyboard.flat().length, 6);
+  assert.deepEqual(menu.reply_markup.keyboard.map(row => row.length), [2, 1, 1, 2]);
   assert.equal(menu.reply_markup.inline_keyboard, undefined);
   assert.match(progress.text, /Мой прогресс/);
   assert.deepEqual(progress.reply_markup.inline_keyboard.flat().map(button => button.callback_data).sort(),
@@ -210,7 +211,7 @@ test('Медицинские экраны сохраняют профиль и �
   const before = await load(db, id);
   const job = await get('SELECT * FROM delivery_jobs WHERE user_id=?', id);
   for (let i = 0; i < 2; i++) {
-    assert.match(await s.nav('physical'), /медицинская оценка сегодня/);
+    assert.match(await s.nav('physical'), /медицинской оценкой сегодня/);
     assert.match(await s.press('Куда обратиться'), /врачом-наркологом/);
     assert.match(await s.press('🚑 Экстренная помощь'), /112 или 103.*местному экстренному номеру/);
     assert.match(await s.press('Главное меню'), /Мой прогресс/);
@@ -336,7 +337,7 @@ test('Пошаговая статистика: пресеты, ручной вв
   const s = session(110);
   await onboard(s);
   await s.nav('edit.habit');
-  await s.press('📊 Настроить полную статистику');
+  await s.press('📊 Полная статистика');
   await s.press('Пиво');
   await s.press('Несколько раз в неделю');
   await s.press('3');
@@ -380,7 +381,7 @@ test('Календарь, бюджет в другой валюте и преж�
   await onboard(s, { habit: true });
   await s.nav('edit.mode');
   await s.press('Календарный');
-  await s.press('💰 Считать только деньги');
+  await s.press('💰 Только деньги');
   await s.press('Другая валюта');
   await s.press('€ Евро');
   await s.press('За привычный день');
@@ -473,7 +474,7 @@ test('Медицинские экраны сохраняют черновик, �
   await onboard(s);
   for (const destination of ['📊 Мой прогресс', '/morning', '/privacy', '/start']) {
     await s.nav('edit.habit');
-    const old = s.findButton('📊 Настроить полную статистику');
+    const old = s.findButton('📊 Полная статистика');
     const before = (await load(db, id)).fsm;
     await s.nav('emergency');
     assert.deepEqual((await load(db, id)).fsm, before);
@@ -482,7 +483,7 @@ test('Медицинские экраны сохраняют черновик, �
     assert.match(await s.receive({ callback: old }), /устарела/);
   }
   await s.nav('edit.habit');
-  const old = s.findButton('📊 Настроить полную статистику');
+  const old = s.findButton('📊 Полная статистика');
   await s.receive('/delete');
   assert.equal((await load(db, id)).fsm.step, 'delete');
   assert.match(await s.receive({ callback: old }), /устарела/);
@@ -512,6 +513,23 @@ test('Приватное превью обратимо и не снимает м
   assert.deepEqual((await load(db, id)).profile, state.profile);
   assert.equal(await s.nav('morning.preview'), 'Твой отчёт готов');
   assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), null);
+});
+
+test('Отмена ввода в мастере возвращает к привычке и не сохраняет черновик', async () => {
+  const id = 155, s = session(id);
+  await onboard(s);
+  await s.nav('settings');
+  await s.press('💰 Привычка и экономия');
+  await s.press('Прежняя привычка');
+  assert.match(await s.press('Назад'), /Привычка и экономия/);
+  await s.press('Прежняя привычка');
+  await s.press('💰 Только деньги');
+  await s.press('За неделю');
+  assert.match(await s.press('Отмена'), /Привычка и экономия/);
+  assert.deepEqual((await load(db, id)).fsm, {});
+  assert.equal(await get('SELECT 1 FROM habit_versions WHERE user_id=?', id), null);
+  assert.match(await s.press('Назад'), /Настройки/);
+  assert.match(await s.press('Главное меню'), /Мой прогресс/);
 });
 
 test('Старый профиль без медицинской паузы сохраняет расписание и чеки при повторной нормализации', async () => {
@@ -549,13 +567,13 @@ test('Форматы даты, времени и суммы, возврат из
   assert.match(await s.receive('7:00'), /Мой прогресс/);
   assert.equal((await load(db, id)).profile.base.ms, Date.parse('2026-03-01T04:00Z'));
   await s.nav('edit.habit');
-  await s.press('💰 Считать только деньги');
+  await s.press('💰 Только деньги');
   await s.press('За привычный день');
   await s.receive('1 400 рублей');
   assert.match(await s.press('Назад'), /Введи примерную сумму/);
   await s.nav('edit.mode');
   await s.press('Календарный');
-  await s.press('💰 Считать только деньги');
+  await s.press('💰 Только деньги');
   await s.press('За привычный день');
   assert.match(await s.receive('1000 EUR'), /Проверь формат/);
   await s.receive('1 000 руб.');
@@ -579,7 +597,7 @@ test('Отмена исторического исправления сохра�
   await onboard(s, { habit: true });
   const budget = async amount => {
     await s.nav('edit.habit');
-    await s.press('💰 Считать только деньги');
+    await s.press('💰 Только деньги');
     await s.press('За неделю');
     await s.receive(amount);
     await s.press('✅ Сохранить');
