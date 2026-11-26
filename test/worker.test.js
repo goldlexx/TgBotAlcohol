@@ -107,7 +107,7 @@ async function onboard(s, { notifications = false, habit = false } = {}) {
   if (notifications) {
     await s.nav('edit.subscribe');
     await s.press('08:00');
-    await s.press('⚙️ Настройки уведомлений');
+    await s.press('⚙️ К уведомлениям');
     await s.press('Формат превью');
     await s.press('Нейтральное сообщение');
   }
@@ -154,8 +154,8 @@ test('P0 помощь до регистрации, симптомы и сомн�
     assert.ok(!/urgent|symptom|initial|reason|unsure/.test(row.fsm));
     if (row.neutral) {
       assert.match(await s.press('🚑 Экстренная помощь'), /Немедленно вызови скорую[\s\S]+112 или 103/);
-      assert.match(await s.nav('craving'), /Резкое прекращение/);
-      assert.match(await s.nav('crave.stress'), /медицинской оценкой/);
+      assert.match(await s.nav('craving'), /Важно про самочувствие/);
+      assert.match(await s.nav('crave.stress'), /Попробуй сейчас/);
     }
   }
   const s = session(103);
@@ -171,7 +171,7 @@ test('P0 помощь до регистрации, симптомы и сомн�
   const registered = await load(db, 103);
   assert.equal(registered.neutral, false);
   assert.equal(registered.profile.medicalHold, true);
-  assert.match(await s.press('06:00'), /Автоматические отчёты на паузе/);
+  assert.match(await s.press('06:00'), /Автоматическая доставка ограничена/);
   assert.equal((await load(db, 103)).job, null);
 });
 
@@ -192,7 +192,7 @@ test('Регистрация, /start без сброса, контент, цел
   assert.match(await s.press('🔄 Другая идея'), /Жизнь без алкоголя/);
   assert.match(await s.nav('recovery'), /Общие ориентиры/);
   assert.match(await s.press('📅 Все этапы восстановления'), /Этапы восстановления/);
-  assert.match(await s.press('Назад'), /Восстановление организма/);
+  assert.match(await s.press('🫀 К восстановлению'), /Восстановление организма/);
   assert.match(await s.press('🔬 Подробнее и источники'), /Выбери тему/);
   assert.match(await s.press('Энергия'), /Кого изучали/);
   assert.ok(s.messages()[0].reply_markup.inline_keyboard.flat().some(button => button.url?.startsWith('https://')));
@@ -229,7 +229,7 @@ test('Медицинские экраны сохраняют профиль и �
   assert.match(await s.nav('history'), /Начало отслеживания/);
   assert.match(await s.nav('settings'), /Последнее употребление/);
   assert.match(await s.nav('awards'), /3 из 12/);
-  assert.match(await s.nav('craving'), /Резкое прекращение/);
+  assert.match(await s.nav('craving'), /Важно про самочувствие[\s\S]+Что сейчас происходит/);
   const manual = await s.receive('/morning');
   assert.match(manual, /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
   assert.match(manual, /При симптомах отмены/);
@@ -369,7 +369,7 @@ test('Пошаговая статистика: пресеты, ручной вв
   assert.match(progress, /л пива<\/b>/);
   assert.match(progress, /мл коньяка<\/b>/);
   assert.doesNotMatch(progress, /этанол|ккал|бутылок/);
-  assert.match(await s.press('📊 Подробная статистика'), /Чистый этанол:.*частично/);
+  assert.match(await s.press('📊 Подробная статистика'), /Чистый спирт \(этанол\), оценка:.*частично/);
   await s.nav('edit.habit');
   await s.press('✏️ Изменить сохранённое');
   await s.press('✏️ 2. Коньяк');
@@ -453,7 +453,7 @@ test('Показатели сохраняются и применяются в �
   assert.match(progress, /Трезвых выходных.*1/);
   assert.match(progress, /Всего трезвых дней/);
   assert.doesNotMatch(progress, /этанол|ккал/);
-  assert.match(await s.nav('details'), /Дефицит калорий и снижение веса по ней не определяются/);
+  assert.match(await s.nav('details'), /Она не определяет дефицит калорий, снижение веса/);
   const morning = await s.receive('/morning');
   assert.doesNotMatch(morning, /этанол|ккал/);
   assert.match(morning, /Всего трезвых дней/);
@@ -467,11 +467,11 @@ test('Показатели сохраняются и применяются в �
   await s.press('Чистый этанол · подробно');
   await s.press('Калории · подробно');
   assert.doesNotMatch(await s.nav('progress'), /Сэкономлено|Не выпито|Трезвых выходных|Всего трезвых дней|ккал|этанол/);
-  assert.match(await s.receive('/morning'), /Калории из этанола/);
+  assert.match(await s.receive('/morning'), /Энергия этанола, оценка/);
   await s.nav('metrics');
   await s.press('Калории · и в отчёте');
   assert.doesNotMatch(await s.nav('details'), /ккал/);
-  assert.match(await s.receive('/morning'), /Чистый этанол/);
+  assert.match(await s.receive('/morning'), /Чистый спирт \(этанол\), оценка/);
   assert.doesNotMatch(await s.receive('/morning'), /ккал/);
   assert.deepEqual((await load(db, id)).profile.base, profile.base);
 });
@@ -511,7 +511,7 @@ test('Приватное превью обратимо и не снимает м
   await s.nav('edit.push');
   await s.press('Обычный отчёт');
   assert.equal(await s.nav('morning.preview'), 'Автоматическая отправка на паузе.');
-  assert.match(await s.nav('craving'), /Резкое прекращение/);
+  assert.match(await s.nav('craving'), /Важно про самочувствие[\s\S]+Что сейчас происходит/);
   assert.deepEqual((await load(db, id)).profile, { ...state.profile, privatePush: false });
   assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), null);
   await s.nav('edit.push');
@@ -1023,11 +1023,12 @@ test('Регистрация: «Не сейчас» и отмена своего
     assert.equal(profile.clock, '08:00');
     assert.deepEqual(fsm, {});
     assert.equal(job, null);
-    assert.match(await s.nav('settings'), /Утренний отчёт выключен/);
-    assert.match(await s.press('🔔 Уведомления'), /Утренний отчёт выключен/);
+    assert.match(await s.nav('settings'), /Подписка: выключена/);
+    assert.match(await s.press('🔔 Уведомления'), /Подписка: выключена[\s\S]*Предпочтительное время/);
     const buttons = s.messages()[0].reply_markup.inline_keyboard.flat();
     assert.ok(buttons.some(b => b.text === 'Подключить ежедневные отчёты'));
     assert.ok(buttons.some(b => b.text === 'Изменить время'));
+    assert.ok(buttons.some(b => b.text === 'Пример уведомления'));
     assert.ok(buttons.every(b => b.text !== 'Отключить уведомления'));
   }
 });
@@ -1047,13 +1048,13 @@ for (const [id, frequency] of [[169, 'daily'], [170, 'weekly'], [171, 'off']]) {
     assert.deepEqual(after.profile, { ...before.profile, clock: '18:30' });
     if (frequency === 'off') {
       assert.equal(after.job, null);
-      assert.match(result, /Утренний отчёт выключен/);
+      assert.match(result, /Подписка: выключена/);
       assert.doesNotMatch(result, /Следующий отчёт/);
     } else {
       assert.equal(after.job.slot, Date.parse('2026-03-' + (frequency === 'weekly' ? '12' : '10') + 'T15:30Z'));
       assert.match(result, /Следующий отчёт/);
     }
-    assert.match(await s.press('⚙️ Настройки уведомлений'), /18:30 · Москва/);
+    assert.match(await s.press('⚙️ К уведомлениям'), /18:30 · Москва/);
     if (frequency === 'weekly') {
       await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
       assert.match(await s.nav('notifications'), /пока не запланирована/);
@@ -1070,10 +1071,13 @@ for (const [id, flag] of [[172, 'medicalHold'], [173, 'neutral'], [174, 'trackin
     await s.nav('notifications');
     await s.press('Подключить ежедневные отчёты');
     const result = await s.press('06:00');
-    assert.match(result, /Время отчёта сохранено[\s\S]*Автоматические отчёты на паузе[\s\S]*Ручной отчёт и статистика доступны/);
+    assert.match(result, /Время отчёта сохранено[\s\S]*Автоматическая доставка ограничена по соображениям безопасности[\s\S]*Ручной отчёт доступен/);
     assert.doesNotMatch(result, /Следующий отчёт|подключён/);
     s.findButton('📊 Мой прогресс');
+    s.findButton('⚕️ Почему отчёты на паузе?');
     s.findButton('⚕️ Медицинская помощь');
+    await s.press('⚕️ Почему отчёты на паузе?');
+    assert.match(s.messages()[0].text, /Медицинская пауза[\s\S]+не является диагнозом/);
     await s.nav('edit.push');
     await s.press('Нейтральное сообщение');
     await s.receive('/start');
@@ -1085,8 +1089,8 @@ for (const [id, flag] of [[172, 'medicalHold'], [173, 'neutral'], [174, 'trackin
     assert.equal(Boolean(profile.medicalHold), flag !== 'neutral');
     assert.equal(profile.trackingPaused, undefined);
     assert.equal(job, null);
-    assert.match(await s.nav('notifications'), /Автоматические отчёты на паузе/);
-    assert.match(await s.nav('recovery'), /При симптомах отмены[\s\S]*Следующий рубеж/);
+    assert.match(await s.nav('notifications'), /Автоматическая доставка ограничена/);
+    assert.match(await s.nav('recovery'), /Текущий период[\s\S]+При симптомах отмены/);
     assert.match(await s.receive('/morning'), /Следующий рубеж[\s\S]*Идея дня[\s\S]*При симптомах отмены/);
     assert.match(await s.press('⚕️ Мне плохо'), /Немедленно вызови скорую/);
     assert.match(await s.press('Главное меню'), /Мой прогресс/);
@@ -1107,7 +1111,8 @@ test('Оба сохранённых флага: 23 дня 20 часов, пол�
   ]);
   const before = await load(db, id);
   const recovery = await s.nav('recovery');
-  assert.match(recovery, /23 дня 20 часов без алкоголя[\s\S]+Первые недели[\s\S]+Печень[\s\S]+Следующий рубеж — 30 дней[\s\S]+61%[\s\S]+6 дней 4 часа/);
+  assert.match(recovery, /23 дня 20 часов без алкоголя[\s\S]+Текущий период · Первые недели[\s\S]+Сон[\s\S]+Ближайший ориентир — 1 месяц[\s\S]+6 дней 4 часа/);
+  assert.doesNotMatch(recovery, /▰|▱/);
   s.findButton('📅 Все этапы восстановления');
   s.findButton('🔬 Подробнее и источники');
   s.findButton('🚑 Экстренная помощь');
@@ -1120,7 +1125,7 @@ test('Оба сохранённых флага: 23 дня 20 часов, пол�
   await s.press('🚑 Экстренная помощь');
   assert.match(s.messages()[0].text, /Немедленно вызови скорую/);
   assert.match(await s.press('Главное меню'), /Мой прогресс/);
-  assert.match(await s.nav('notifications'), /Утренний отчёт выключен[\s\S]+Автоматические отчёты на паузе/);
+  assert.match(await s.nav('notifications'), /Подписка: выключена[\s\S]+Предпочтительное время[\s\S]+Автоматическая доставка ограничена/);
   assert.doesNotMatch(s.messages()[0].text, /Следующий отчёт:/);
   const after = await load(db, id);
   for (const key of ['profile', 'neutral', 'intervals', 'episodes', 'habits', 'job']) assert.deepEqual(after[key], before[key]);

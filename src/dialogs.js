@@ -40,7 +40,7 @@ function prompt(state, now, correction = '') {
     case 'background': return form('🛡 **Важный вопрос**\n\n' + riskHistory, [b('Да', 'risk'), b('Нет', 'next')], [b('Не знаю', 'unsure')], ...helpButtons.map(b => [b]));
     case 'paused': return form('⚕️ **Медицинская помощь**\n\n' + risk + (f.flow === 'new'
       ? '\n\nПосле обращения за профессиональной помощью можно записать дату уже происходящего воздержания.' : ''),
-      [helpButtons[1]], [nav('Куда обратиться', 'care')],
+      [helpButtons[1]], [nav('Куда обратиться', 'care.help')],
       f.flow === 'new' ? [b('Записать дату', 'record')]
         : f.flow === 'complete' ? [b('Продолжить запись эпизода', 'record')] : [],
       [nav('Главное меню', 'menu')]);
@@ -89,7 +89,7 @@ function prompt(state, now, correction = '') {
       ...contents.map(([title, key]) => [b(title, key)]));
     case 'push': return form('🔐 **Формат превью**\n\nНейтральное сообщение содержит только фразу «Твой отчёт готов».',
       [b('Обычный отчёт', 'normal')], [b('Нейтральное сообщение', 'private')]);
-    case 'episode': return form('☀️ **Твой путь продолжается**\n\nОдин эпизод употребления не перечёркивает предыдущие успехи. История, трезвые дни и ранее полученные достижения сохраняются.',
+    case 'episode': return form('☀️ **Твой путь продолжается**\n\nОдин эпизод употребления не перечёркивает предыдущие успехи. История, трезвые дни и ранее полученные достижения сохраняются.\n\nУпотребление уже завершилось или ещё продолжается?',
       [b('Употребление завершилось', 'complete')], [b('Эпизод продолжается', 'active')], ...helpButtons.map(b => [b]));
     case 'episodeConfirm': return form('📅 **Проверь запись**\n\nСохранить ' + (f.flow === 'correct' ? 'исправление истории' : 'эпизод употребления') + '?' +
       (f.start !== undefined ? '\nНачало · ' + observation({ ms: f.start, precision: 'instant' }, f.zone) : '') +

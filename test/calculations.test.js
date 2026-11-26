@@ -210,3 +210,20 @@ test('Бюджет без напитков оставляет объём и эт
   assert.equal(mixed.partialDrinks, false);
   close(mixed.money.get('RUB'), 1000);
 });
+
+test('Исторические версии привычки объясняют расхождение суммы и объёма в 23 дн. 20 ч. без ошибки формул', () => {
+  const streakMs = (23 * 24 + 20) * 3_600_000;
+  const now = epoch + streakMs;
+  const beerEffective = now - Math.round(5.21 / 3 * 7 * DAY);
+  const priorBudgetEffective = now - Math.round(1518 / 720 * 7 * DAY);
+  const versions = [
+    { effective: priorBudgetEffective, mode: 'average', period: 7, currency: 'RUB', budget: 72_000, items: [] },
+    { effective: beerEffective, mode: 'average', period: 7, currency: 'RUB', budget: 72_000,
+      items: [{ drink: 'beer', weekday: null, portions: 1, ml: 3000, abv: 5, price: null }] }
+  ];
+  const stats = calculate([range(epoch)], versions, 'UTC', now);
+  assert.ok(Math.abs(stats.drinks.get('["beer",3000]').toNumber() * 3 - 5.21) < 0.02);
+  assert.ok(Math.abs(stats.grams.toNumber() - 205.5) < 1);
+  assert.ok(Math.abs(stats.calories.toNumber() - 1438.7) < 5);
+  assert.ok(Math.abs(stats.money.get('RUB').div(100).toNumber() - 1518) < 2);
+});
