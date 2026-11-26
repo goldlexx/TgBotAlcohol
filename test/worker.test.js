@@ -1211,6 +1211,48 @@ test('При открытом эпизоде время сохраняется �
   assert.equal(job, null);
 });
 
+test('Навигация v2.4.1: отмена эпизода, устаревшие кнопки, повторные /start и /morning, Cron под паузой', async () => {
+  const id = 158, s = session(id);
+  await seed([id], { frequency: 'daily', clock: '08:00', medicalHold: true });
+  await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
+  const sent = [];
+  await tick(env(), now, async (_, method, body) => { if (method === 'sendMessage') sent.push(body); });
+  assert.equal(sent.length, 0);
+  const before = await load(db, id);
+
+  await s.nav('craving');
+  await s.press('📝 Отметить эпизод');
+  const staleBtn = s.findButton('Употребление завершилось');
+  assert.match(s.messages()[0].text, /Употребление уже завершилось/);
+  assert.match(await s.press('Отмена'), /История прогресса/);
+  assert.equal((await load(db, id)).episodes.length, 0);
+
+  await s.nav('physical');
+  await s.press('Куда обратиться');
+  assert.match(await s.press('Назад'), /Мне физически плохо/);
+  await s.press('Главное меню');
+
+  await s.receive('/start');
+  assert.equal(s.messages().length, 2);
+  assert.match(await s.receive('/morning'), /Доброе утро/);
+  assert.match(await s.receive('/morning'), /Доброе утро/);
+  assert.match(await s.receive({ callback: staleBtn }), /Кнопка устарела/);
+
+  await s.nav('edit.clock');
+  assert.match(await s.press('09:00'), /Время отчёта сохранено/);
+  assert.match(await s.press('⚙️ К уведомлениям'), /09:00/);
+  assert.match(await s.nav('stages.1'), /Страница 2 из 2/);
+  assert.match(await s.press('📖 Полгода'), /Полгода и далее/);
+  assert.match(await s.press('🔬 Память'), /Recovery of neuropsychological function/);
+  assert.match(await s.press('Назад'), /Полгода и далее/);
+  assert.match(await s.press('← К этапам'), /Страница 2 из 2/);
+
+  const after = await load(db, id);
+  assert.deepEqual(after.profile, { ...before.profile, clock: '09:00' });
+  assert.equal(after.job, null);
+  assert.equal(after.episodes.length, 0);
+});
+
 test('200 синтетических профилей, общий слот, конкурирующий Cron и параллельные обновления', async t => {
   await seed(idRange.slice(0, 100), { privatePush: true });
   await seed(idRange.slice(100));

@@ -171,8 +171,12 @@ test('Содержательная шкала восстановления ли�
   assert.deepEqual(turn(second, '← Назад'), first);
   const detail = turn(first, '📖 Первый месяц');
   assert.match(detail.text, /Первый месяц \(30 дней\)[\s\S]+Ориентир впереди[\s\S]+Печень[\s\S]+Давление/);
-  assert.match(turn(detail, '🔬 Печень').text, /Mehta|АЛТ и ГГТ/);
+  const ev = turn(detail, '🔬 Печень');
+  assert.match(ev.text, /Mehta|АЛТ и ГГТ/);
+  assert.deepEqual(turn(ev, 'Назад'), detail);
   assert.deepEqual(turn(detail, '← К этапам'), first);
+  const detail2 = turn(second, '📖 Полгода');
+  assert.deepEqual(turn(detail2, '← К этапам'), second);
   assert.match(turn(second, 'Главное меню').text, /Мой прогресс/);
   assert.match(view('stages.0', seriesState(30), now, 1).text, /📍 \*\*Первый месяц/);
   assert.match(view('stages.1', seriesState(365), now, 1).text, /✅ \*\*Полгода и далее[\s\S]+📍 \*\*Год и долгосрочно/);
@@ -371,6 +375,56 @@ test('Матрица 10 медицинских состояний: доступ�
   }
   const medPause = view('medicalPause', make({ neutral: true, profile: { medicalHold: true } }), now, 1);
   assert.match(medPause.text, /не является диагнозом[\s\S]+Хочу выпить[\s\S]+\/morning/);
+  assert.doesNotMatch(medPause.text, /медицинский флаг|ранних версиях|врачебного согласования/i);
   assert.ok(medPause.buttons.flat().some(b => b.callback_data === 'n:craving'));
   assert.ok(medPause.buttons.flat().some(b => b.callback_data === 'n:notifications'));
+});
+
+test('v2.4.1 полировка: единое предупреждение тяги, 60 карточек, чистый язык восстановления и объяснение версий', () => {
+  const med = { ...seriesState(23), profile: { ...state.profile, medicalHold: true }, neutral: true };
+  for (const route of ['craving', 'crave.work', 'crave.stress']) {
+    const out = view(route, med, now, 1);
+    assert.equal((out.text.match(/физически плохо/g) ?? []).length, 1);
+    assert.doesNotMatch(out.text, /медицинский флаг|в профиле сохранена медицинская пауза/i);
+  }
+  const normalCrave = view('craving', state, now, 1);
+  assert.equal((normalCrave.text.match(/физически плохо/g) ?? []).length, 1);
+  assert.ok(view('relief', med, now, 1).buttons.flat().some(b => b.callback_data === 'n:emergency'));
+  for (const card of Object.values(cravings).flat()) {
+    assert.doesNotMatch(card, /прими душ|приготовь еду|снимок на прогулке|детокс|выпей пива/i);
+  }
+  for (const d of [1, 7, 23, 30, 90, 180, 365]) {
+    const rec = view('recovery', seriesState(d), now, 1).text;
+    assert.doesNotMatch(rec, /ресурс|тонус|выравнивается обмен веществ|ясность мыслей и устойчивость режима сна закрепляются/i);
+  }
+  for (const p of ['stages.0', 'stages.1']) {
+    const st = view(p, seriesState(90), now, 1).text;
+    assert.doesNotMatch(st, /ресурс|тонус|выравнивается обмен веществ|ясность мыслей и устойчивость режима сна закрепляются/i);
+  }
+  const baseStart = Date.parse('2026-11-02T23:00:00Z');
+  const v1 = Date.parse('2026-11-14T16:00:00Z');
+  const v2 = Date.parse('2026-11-25T02:20:48.563Z');
+  const tNow = baseStart + (23 * 24 + 21) * 3_600_000 + 20 * 60_000;
+  const ownerLike = {
+    user: { generation: 'g' },
+    profile: { zone: 'Europe/Moscow', historyZone: 'Europe/Moscow', frequency: 'off', clock: '08:00',
+      base: { ms: baseStart, precision: 'minute' } },
+    neutral: true,
+    episodes: [],
+    intervals: [{ start: baseStart, end: null, precision: 'minute' }],
+    habits: [
+      { effective: v1, mode: 'average', period: 7, budget: null, currency: 'RUB',
+        items: [{ drink: 'beer', portions: 6, ml: 500, abv: 5, price: 15000 }] },
+      { effective: v2, mode: 'average', period: 7, budget: null, currency: 'RUB',
+        items: [{ drink: 'beer', portions: 6, ml: 500, abv: 5, price: 12000 }] }
+    ]
+  };
+  const detText = view('details', ownerLike, tNow, 1).text;
+  assert.match(detText, /1[\s\u00a0]?52[01]\s₽/);
+  assert.match(detText, /5,22 л пива/);
+  assert.match(detText, /по версиям привычки с даты их сохранения/);
+  assert.match(view('method.details', ownerLike, tNow, 1).text, /по своей версии/);
+  for (const from of ['physical', 'help', 'medicalPause']) {
+    assert.ok(view('care.' + from, med, now, 1).buttons.flat().some(b => b.callback_data === 'n:' + from));
+  }
 });
