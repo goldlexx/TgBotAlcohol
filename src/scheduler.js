@@ -1,5 +1,5 @@
 import { first, guard, load, saveAwards, stmt } from './storage.js';
-import { achievements, reached } from './calculations.js';
+import { achievements, MILESTONES, reached } from './calculations.js';
 import { FRESH, slotFor } from './schedule.js';
 import { report } from './views.js';
 import { DAY, today, hasReportDays } from './time.js';
@@ -8,6 +8,44 @@ import { allowed, message, telegram, TelegramError } from './telegram.js';
 export const BATCH = 8;
 
 const skipped = reason => console.info(JSON.stringify({ event: 'delivery_skipped', reason }));
+
+async function restoreJobs(env, now, limit) {
+  const db = env.DB;
+  const chats = (env.CLOSED_TEST === '1' ? [env.ALLOWED_CHAT_IDS] : env.ALLOWED_CHAT_IDS.split(',')).map(id => id.trim());
+  const { results } = await stmt(db, `WITH candidates AS (
+      SELECT u.id, u.generation, u.delivery_epoch, u.profile,
+        json_extract(u.profile,'$.frequency') AS frequency, a.start
+      FROM users u JOIN abstinence_intervals a ON a.user_id=u.id AND a.end IS NULL
+      WHERE u.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?) WHERE value=CAST(CAST(value AS INTEGER) AS TEXT))
+        AND a.start=(SELECT max(start) FROM abstinence_intervals WHERE user_id=u.id)
+        AND NOT EXISTS(SELECT 1 FROM delivery_jobs WHERE user_id=u.id)
+    )
+    SELECT *, (SELECT json_group_array(local_day) FROM delivery_receipts
+      WHERE user_id=candidates.id AND local_day>=date(?/1000,'unixepoch','-2 days')) AS receipt_days
+    FROM candidates WHERE (frequency='daily'
+      OR (frequency='milestones' AND start>?)
+      OR (frequency IN ('weekly','selected') AND json_type(profile,'$.weekdays')='array'
+          AND json_array_length(profile,'$.weekdays')>0
+          AND NOT EXISTS(SELECT 1 FROM json_each(profile,'$.weekdays') WHERE type!='integer' OR value NOT BETWEEN 1 AND 7)))
+    ORDER BY id LIMIT ?`, JSON.stringify(chats), now, now - MILESTONES.at(-1) * DAY, limit).all();
+  const writes = [];
+  for (const row of results) {
+    if (!allowed(env, row.id)) continue;
+    const profile = JSON.parse(row.profile);
+    const state = { profile, intervals: [{ start: row.start, end: null }] };
+    const receipts = new Set(JSON.parse(row.receipt_days));
+    let slot = slotFor(state, now);
+    while (slot !== null && receipts.has(today(slot, profile.zone))) {
+      slot = slotFor(state, now, today(slot, profile.zone));
+    }
+    if (slot === null || slot <= now) continue;
+    writes.push(stmt(db, `INSERT INTO delivery_jobs SELECT id,?,? FROM users
+      WHERE id=? AND generation=? AND delivery_epoch=?
+        AND NOT EXISTS(SELECT 1 FROM delivery_receipts WHERE user_id=users.id AND local_day=?)
+      ON CONFLICT(user_id) DO NOTHING`, slot, slot, row.id, row.generation, row.delivery_epoch, today(slot, profile.zone)));
+  }
+  if (writes.length) await db.batch(writes);
+}
 
 async function deliver(env, job, now, api) {
   const db = env.DB, id = job.user_id;
@@ -100,4 +138,5 @@ export async function tick(env, now = Date.now(), api = telegram) {
     stmt(db, 'DELETE FROM deletion_markers WHERE subject IN (SELECT subject FROM deletion_markers WHERE expires_at<=? ORDER BY expires_at LIMIT 200)', now)
   ]);
   if (outcomes.some(result => result.status === 'rejected')) throw new Error('Scheduled delivery failed');
+  if (due.results.length < BATCH) await restoreJobs(env, now, BATCH - due.results.length);
 }

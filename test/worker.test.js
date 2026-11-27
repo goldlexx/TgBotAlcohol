@@ -15,7 +15,7 @@ import { today } from '../src/time.js';
 const now = Date.parse('2026-03-10T08:00Z');
 const secret = 'local-synthetic-only';
 const idRange = Array.from({ length: 200 }, (_, i) => 800_000 + i);
-const chats = [...Array.from({ length: 80 }, (_, i) => 100 + i), ...idRange];
+const chats = [...Array.from({ length: 81 }, (_, i) => 100 + i), ...idRange];
 const fakeEnv = { WEBHOOK_SECRET: secret, TELEGRAM_TOKEN: 'local-stub', ALLOWED_CHAT_IDS: chats.join(',') };
 let mf, db, seq = 1000;
 const statement = (sql, ...args) => db.prepare(sql).bind(...args);
@@ -909,6 +909,8 @@ test('Коррекция серии и удаление меняют тольк�
   const sent = [];
   const closed = { ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id) };
   const api = async (_, __, body) => sent.push(body.text);
+  // Isolate this due slot from subscriptions restored in preceding synthetic tests.
+  await statement('DELETE FROM delivery_jobs WHERE user_id<>? AND next_due_at<=?', id, job.slot).run();
   await Promise.all([tick(closed, job.slot, api), tick(closed, job.slot, api)]);
   assert.equal(sent.length, 1);
   assert.match(sent[0], /Первые сутки позади/);
@@ -1306,4 +1308,73 @@ test('06:00 МСК: сохранённый риск не мешает Cron от�
   assert.equal((await load(db, id)).job.slot, next + DAY);
   await tick({ ...closed, TELEGRAM_TOKEN: '' }, next, async () => assert.fail('Unexpected send'));
   assert.deepEqual(JSON.parse(log.mock.calls.at(-1).arguments[0]), { event: 'delivery_skipped', reason: 'missing_configuration' });
+});
+
+test('Bootstrap восстанавливает 06:00 МСК без отправки задним числом и выдерживает параллельный Cron', async () => {
+  const id = 159;
+  await seed([id], { zone: 'Europe/Moscow', clock: '06:00', medicalHold: true });
+  await db.batch([
+    statement('DELETE FROM delivery_jobs WHERE user_id=?', id),
+    statement("INSERT INTO delivery_receipts VALUES (?,'2026-03-10','sent',1,0,NULL)", id)
+  ]);
+  const before = (await load(db, id)).user;
+  const start = Date.parse('2026-03-10T02:59Z');
+  const next = Date.parse('2026-03-11T03:00Z');
+  const closed = { ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id) };
+  const sent = [];
+  const api = async (_, __, body) => sent.push(body);
+  await Promise.all([tick(closed, start, api), tick(closed, start, api)]);
+  assert.deepEqual((await load(db, id)).job, { slot: next, next_due_at: next });
+  await db.batch([
+    statement('DELETE FROM delivery_jobs WHERE user_id=?', id),
+    statement('DELETE FROM delivery_receipts WHERE user_id=?', id)
+  ]);
+  await tick(closed, Date.parse('2026-03-10T03:05Z'), api);
+  assert.equal(sent.length, 0);
+  assert.deepEqual((await load(db, id)).job, { slot: next, next_due_at: next });
+  assert.deepEqual((await load(db, id)).user, before);
+  await Promise.all([tick(closed, next, api), tick(closed, next, api)]);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].chat_id, id);
+  assert.match(sent[0].text, /Твой отчёт/);
+  assert.doesNotMatch(sent[0].text, /Факт о здоровье|Идея дня/);
+  assert.equal((await load(db, id)).job.slot, next + DAY);
+});
+
+test('Bootstrap пропускает выключенную подписку, закрытую серию, чужой чат и неизвестные дни', async () => {
+  await seed([150], { frequency: 'off' });
+  await seed([151, 152, 153]);
+  await seed([154], { frequency: 'weekly', weekdays: [] });
+  await db.batch([
+    statement('DELETE FROM delivery_jobs WHERE user_id BETWEEN 150 AND 154'),
+    statement('UPDATE abstinence_intervals SET end=? WHERE user_id=151', now - DAY)
+  ]);
+  await tick({ ...env(), ALLOWED_CHAT_IDS: '150,151,153,154' }, now - 1, async () => assert.fail('Unexpected send'));
+  assert.deepEqual((await statement('SELECT user_id FROM delivery_jobs WHERE user_id BETWEEN 150 AND 154').all()).results,
+    [{ user_id: 153 }]);
+  assert.equal((await load(db, 150)).profile.frequency, 'off');
+});
+
+test('Bootstrap не восстанавливает задание после смены подписки между чтением и записью', async () => {
+  const id = 180;
+  await seed([id]);
+  await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
+  const s = session(id);
+  await s.nav('notifications');
+  let changed = false;
+  const wrappedDb = {
+    prepare: db.prepare.bind(db),
+    async batch(writes) {
+      assert.equal(changed, false);
+      changed = true;
+      await s.press('Отключить уведомления');
+      return db.batch(writes);
+    }
+  };
+  await tick({ ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id), DB: wrappedDb }, now - 1,
+    async () => assert.fail('Unexpected send'));
+  assert.equal(changed, true);
+  const state = await load(db, id);
+  assert.equal(state.profile.frequency, 'off');
+  assert.equal(state.job, null);
 });
