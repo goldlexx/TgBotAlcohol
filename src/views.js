@@ -4,7 +4,7 @@ import { awardCatalog } from '../content/achievements.js';
 import { calculate, MILESTONES } from './calculations.js';
 import { digits, drinkName, formatMoney, hasCalendarBudget, volume } from './habits.js';
 import { DAY, displayDay, displayTime, hasReportDays, observation, today, zoneLabel } from './time.js';
-import { emergency, emergencyNumbers, hasMedicalRisk, risk, privacy } from './safety.js';
+import { emergency, emergencyNumbers, hasMedicalRisk, privacy } from './safety.js';
 import { FRESH } from './schedule.js';
 
 export const sections = [
@@ -28,7 +28,6 @@ export const welcome = screen('☀️ **Счастье без алкоголя**
 export const help = screen('🆘 **Помощь сейчас**\n\nЕсли физически плохо или нужна срочная помощь, выбери подходящий маршрут.',
   ...helpButtons.map(b => [b]), [nav('Хочу выпить', 'craving'), nav('🔐 Мои данные', 'privacy')], menuButton);
 const emergencyView = screen('🚑 **Экстренная помощь**\n\n' + emergency, menuButton);
-const riskView = screen('⚕️ **Медицинская помощь**\n\n' + risk, [helpButtons[1]], careButton('help'), menuButton);
 const careSteps = [
   '**Немедленно вызови скорую** при судорогах, галлюцинациях, сильной спутанности сознания или резком ухудшении.\n' + emergencyNumbers,
   '**Обратись за медицинской оценкой сегодня**, если после перерыва или сокращения алкоголя появились дрожь, потливость, тошнота или сильная тревога. При других симптомах или сомнениях тоже обратись за оценкой сегодня.',
@@ -61,8 +60,7 @@ export function statsFor(state, now) {
 }
 const openEpisode = state => state.episodes.at(-1)?.last === null;
 export function reportPause(state) {
-  const reason = hasMedicalRisk(state) ? 'Из-за возможного медицинского риска.'
-    : openEpisode(state) ? 'Пока открыт эпизод употребления.'
+  const reason = openEpisode(state) ? 'Пока открыт эпизод употребления.'
       : state.profile && !hasReportDays(state.profile) ? 'Дни прежнего расписания неизвестны. Выбери дни заново.'
         : state.profile && state.profile.frequency !== 'off' && state.intervals.at(-1)?.end !== null ? 'Нет активного периода отслеживания.' : '';
   return reason ? '**Автоматические отчёты на паузе.** ' + reason + ' Ручной отчёт и статистика доступны.' : '';
@@ -152,7 +150,7 @@ function metricLines(profile, stats, mode) {
 function progressText(state, stats, mode = 'progress') {
   const paused = openEpisode(state);
   const lines = [paused ? '**Серия на паузе**' : series(stats)];
-  if (!paused && (mode !== 'onboarding' || !hasMedicalRisk(state))) {
+  if (!paused) {
     if (stats.next) lines.push(milestoneText(stats));
     const goal = state.profile.goal;
     if (goal && mode !== 'morning') lines.push(stats.current >= goal * DAY ? '🎯 Личная цель выполнена · ' + label(goal)
@@ -222,9 +220,13 @@ export function report(state, now, id, day, { automatic = false, milestone = nul
   const p = state.profile;
   const paused = openEpisode(state);
   const showHelp = hasMedicalRisk(state) || paused;
-  if (automatic && showHelp) return screen('Автоматическая отправка на паузе.');
+  if (automatic && paused) return screen('Автоматическая отправка на паузе.');
   if (automatic && p.privatePush) return screen('Твой отчёт готов', [nav('Открыть отчёт', 'morning')]);
   const stats = statsFor(state, now);
+  if (automatic && hasMedicalRisk(state)) {
+    return screen(['📊 **Твой отчёт**', series(stats), metricLines(p, stats, 'morning').join('\n'), symptomNote]
+      .filter(Boolean).join('\n\n'), ...helpButtons.map(button => [button]));
+  }
   if (!automatic && stats.earlier && today(state.intervals.at(-1).start + stats.earlier * DAY, p.zone) === day) milestone = stats.earlier;
   const greeting = milestone ? '🏆 **' + awardCatalog[milestone][2] + '**'
     : afterEpisode ? '☀️ **Твой путь продолжается**' : '☀️ **Доброе утро!**';
@@ -263,9 +265,7 @@ function reportStatus(state, now) {
   const clockLabel = p.frequency === 'off' ? 'Предпочтительное время' : 'Время отчёта';
   const clockLine = '🕒 ' + clockLabel + ': ' + p.clock + ' · ' + zoneLabel(p.zone, now);
   const next = planned ? '📅 Следующий отчёт: ' + displayTime(job.next_due_at, p.zone) + '.' : '';
-  const deliveryLine = hasMedicalRisk(state)
-    ? '⚕️ Автоматическая доставка ограничена по соображениям безопасности. Ручной отчёт доступен.'
-    : pause || next || (p.frequency !== 'off' ? '📅 Ближайшая отправка пока не запланирована.' : '');
+  const deliveryLine = pause || next || (p.frequency !== 'off' ? '📅 Ближайшая отправка пока не запланирована.' : '');
   return {
     planned,
     next,
@@ -287,25 +287,16 @@ export function reportSaved(state, now, connecting) {
     ? '🕒 Каждый день в ' + p.clock + ' · ' + zoneLabel(p.zone, now) + '\n\n' + status.next
     : status.text;
   return screen(title + '\n\n' + body,
-    [nav('⚙️ К уведомлениям', 'notifications'), nav('📊 Мой прогресс', 'progress')],
-    hasMedicalRisk(state) ? [nav('⚕️ Почему отчёты на паузе?', 'medicalPause')] : [],
-    hasMedicalRisk(state) ? [nav('⚕️ Медицинская помощь', 'help')] : []);
+    [nav('⚙️ К уведомлениям', 'notifications'), nav('📊 Мой прогресс', 'progress')]);
 }
 const cause = { work: '💼 После работы', company: '👥 В компании', stress: '😟 Стресс', habit: '🔄 Скука или привычка' };
 const causeTitle = { work: '💼 Вечер после работы', company: '👥 Тяга в компании', stress: '😟 Напряжённый момент', habit: '🔄 Меняем привычный ритуал' };
 const noteEpisode = nav('📝 Отметить эпизод', 'episode');
 const contentNames = { both: 'статистика, факт и идея', fact: 'статистика и факт', idea: 'статистика и идея', numbers: 'только статистика' };
 const cravingSafety = '⚕️ **О самочувствии.** Если после паузы или сокращения алкоголя тебе физически плохо (дрожь, потливость, тошнота, сильная тревога), сначала открой медицинскую помощь.';
-const cravingMedicalBanner = state => {
-  if (!hasMedicalRisk(state) && !openEpisode(state)) return '';
-  return '⚠️ **Важно про самочувствие.** ' + (hasMedicalRisk(state)
-    ? 'Автоматические отчёты сейчас на медицинской паузе. Если после отказа или сокращения алкоголя тебе физически плохо — появились дрожь, потливость, тошнота, сильная тревога или судороги —'
-    : 'Сейчас открыт эпизод употребления. Если ты в опьянении или после сокращения алкоголя появились дрожь, потливость, тошнота, сильная тревога или спутанность сознания —') +
-    ' не жди и сразу открой **⚕️ Мне плохо** или **🚑 Экстренная помощь**.';
-};
 
 function cravingStats(state, now) {
-  if (!state.profile || openEpisode(state) || hasMedicalRisk(state)) return '';
+  if (!state.profile || openEpisode(state)) return '';
   const stats = statsFor(state, now);
   return [series(stats), ...moneyLines(stats), '🏆 Наград получено: **' + stats.awards.length + '**'].join('\n');
 }
@@ -322,7 +313,7 @@ export function view(route, state, now, id) {
     case 'emergency': return { ...emergencyView, readOnly: true };
     case 'physical': return { ...physicalView, readOnly: true };
     case 'care': {
-      const returnRoute = ['help', 'physical', 'medicalPause'].includes(arg) ? arg : null;
+      const returnRoute = ['help', 'physical'].includes(arg) ? arg : null;
       return { ...screen('⚕️ **Куда обратиться**\n\n' + careSteps +
         '\n\n• **Россия:** горячая линия Минздрава России `8 800 2000 200` (бесплатно, в том числе по отказу от алкоголя); портал Минздрава «Так здорово»; памятка МЧС о вызове скорой (112/103). Помощь при зависимости можно обсудить с врачом-наркологом.\n' +
         '• **Группы взаимопомощи (не являются медицинской организацией):** «Анонимные алкоголики» (Россия и международный поиск). При физических симптомах нужна медицинская помощь.',
@@ -336,19 +327,7 @@ export function view(route, state, now, id) {
         returnRoute ? back(returnRoute) : [],
         menuButton), readOnly: true };
     }
-    case 'medicalPause': {
-      if (!p) return welcome;
-      return screen([
-        '⚕️ **Медицинская пауза**',
-        hasMedicalRisk(state)
-          ? 'Автоматические утренние отчёты сейчас на паузе ради безопасности при возможном риске симптомов отмены. Эта пауза **не является диагнозом** и не означает, что симптомы есть сейчас.'
-          : 'Сейчас медицинская пауза не действует.',
-        '**Что работает как обычно**\nСтатистика, история, «Восстановление», поддержка в «Хочу выпить», сохранение предпочтительного времени и ручной утренний отчёт /morning.',
-        '**Почему не снимается через уведомления**\nПауза защищает от автоматической рассылки, поэтому обычная смена времени или повторное включение уведомлений её не отменяют.',
-        'Если появились физические симптомы или сомнения — сразу обратись за медицинской оценкой через кнопки ниже.'
-      ].join('\n\n'),
-      helpButtons, [nav('🆘 Хочу выпить', 'craving')], [nav('🔔 К уведомлениям', 'notifications')], menuButton);
-    }
+    case 'medicalPause': return view('notifications', state, now, id);
     case 'privacy': return screen('🔐 **Мои данные**\n\n' + privacy,
       [p && p.frequency !== 'off' && offButton(state), nav('Удалить данные', 'delete')].filter(Boolean), back(p ? 'settings' : 'menu'));
     case 'morning': return { ...report(state, now, id, day, { automatic: arg === 'preview' }), readOnly: true };
@@ -442,7 +421,6 @@ export function view(route, state, now, id) {
       p.frequency === 'off' ? [nav('Подключить ежедневные отчёты', 'edit.subscribe')] : [],
       [nav('Изменить время', 'edit.clock'), nav(p.frequency === 'off' ? 'Другая частота' : 'Изменить частоту', 'edit.notify')],
       [nav('Содержание', 'edit.content'), nav('Формат превью', 'edit.push')],
-      hasMedicalRisk(state) ? [nav('⚕️ Почему отчёты на паузе?', 'medicalPause')] : [],
       p.frequency === 'off' ? [] : [offButton(state)], [nav('Открыть отчёт', 'morning'), nav('Пример уведомления', 'morning.preview')], back('settings'));
     }
     case 'history': {
@@ -496,11 +474,11 @@ export function view(route, state, now, id) {
       ...[0, 2, 4, 6].map(i => choices.slice(i, i + 2)), [nav('🔄 Другая идея', 'life.' + (category?.[1] ?? 'all') + '.' + ((offset + 1) % length))], back());
     }
     case 'craving': {
-      const banner = cravingMedicalBanner(state);
+      const showHelp = hasMedicalRisk(state) || openEpisode(state);
       const action = openEpisode(state) ? nav('Завершить эпизод', 'episode.time') : noteEpisode;
-      return screen(['🆘 **Хочется выпить?**', banner || cravingSafety, cravingStats(state, now),
+      return screen(['🆘 **Хочется выпить?**', !showHelp && cravingSafety, cravingStats(state, now),
         'Если это привычная тяга, попробуй сменить обстановку и отложить решение на несколько минут.',
-        'Что сейчас происходит?'].filter(Boolean).join('\n\n'),
+        'Что сейчас происходит?', showHelp && symptomNote].filter(Boolean).join('\n\n'),
       [nav(cause.work, 'crave.work'), nav(cause.company, 'crave.company')],
       [nav(cause.stress, 'crave.stress'), nav(cause.habit, 'crave.habit')],
       ...helpButtons.map(b => [b]),
@@ -509,11 +487,11 @@ export function view(route, state, now, id) {
     case 'crave': {
       if (!Object.hasOwn(cravings, arg)) return view('craving', state, now, id);
       const list = cravings[arg], offset = offsetFor(other, list.length);
-      const banner = cravingMedicalBanner(state);
+      const showHelp = hasMedicalRisk(state) || openEpisode(state);
       const action = openEpisode(state) ? nav('Завершить эпизод', 'episode.time') : noteEpisode;
-      return screen(['**' + causeTitle[arg] + '**', banner || cravingSafety,
+      return screen(['**' + causeTitle[arg] + '**', !showHelp && cravingSafety,
         '**Попробуй сейчас**\n' + pick(list, day, id, offset),
-        p && !openEpisode(state) ? '☀️ ' + series(statsFor(state, now)) : ''].filter(Boolean).join('\n\n'),
+        p && !openEpisode(state) ? '☀️ ' + series(statsFor(state, now)) : '', showHelp && symptomNote].filter(Boolean).join('\n\n'),
       ...helpButtons.map(b => [b]), [nav('✅ Отпустило', 'relief'), nav('💡 Другой совет', 'crave.' + arg + '.' + ((offset + 1) % list.length))],
       [action], back('craving'));
     }

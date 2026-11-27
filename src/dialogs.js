@@ -224,7 +224,8 @@ function flagMedicalRisk(state, id) {
   state.changed = true;
   if (state.profile) state.profile.medicalHold = true;
   else state.neutral = true;
-  reschedule(state, id, null);
+  // Invalidate a report already prepared with the previous safety state.
+  state.writes.push(['UPDATE users SET delivery_epoch=delivery_epoch+1 WHERE id=?', id]);
 }
 function episodeInput(state, action) {
   const open = state.episodes.at(-1);

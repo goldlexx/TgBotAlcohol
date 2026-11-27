@@ -154,7 +154,7 @@ test('P0 помощь до регистрации, симптомы и сомн�
     assert.ok(!/urgent|symptom|initial|reason|unsure/.test(row.fsm));
     if (row.neutral) {
       assert.match(await s.press('🚑 Экстренная помощь'), /Немедленно вызови скорую[\s\S]+112 или 103/);
-      assert.match(await s.nav('craving'), /Важно про самочувствие/);
+      assert.match(await s.nav('craving'), /При симптомах отмены/);
       assert.match(await s.nav('crave.stress'), /Попробуй сейчас/);
     }
   }
@@ -165,14 +165,15 @@ test('P0 помощь до регистрации, симптомы и сомн�
   assert.match(await s.press('Да'), /врачом заранее/);
   await s.press('Записать дату');
   await s.press(/^Москва /);
-  assert.doesNotMatch(await s.press('Сейчас'), /Цель|▰|▱/);
+  assert.match(await s.press('Сейчас'), /Следующий рубеж/);
   assert.equal(s.messages().length, 2);
-  assert.match(s.messages()[1].text, /Автоматические отчёты на паузе/);
+  assert.match(s.messages()[1].text, /Ежедневный отчёт/);
   const registered = await load(db, 103);
   assert.equal(registered.neutral, false);
   assert.equal(registered.profile.medicalHold, true);
-  assert.match(await s.press('06:00'), /Автоматическая доставка ограничена/);
-  assert.equal((await load(db, 103)).job, null);
+  assert.match(await s.press('06:00'), /Следующий отчёт/);
+  assert.ok((await load(db, 103)).job);
+  await statement("DELETE FROM delivery_jobs WHERE user_id=103").run();
 });
 
 test('Регистрация, /start без сброса, контент, цель, часовой пояс и выключение уведомлений', async () => {
@@ -209,7 +210,7 @@ test('Регистрация, /start без сброса, контент, цел
   assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=104'), null);
 });
 
-test('Медицинские экраны сохраняют профиль и доставку, старый флаг ограничивает только рассылку', async () => {
+test('Медицинские экраны сохраняют профиль и доставку, старый флаг меняет только содержание рассылки', async () => {
   const id = 113;
   await seed([id], { trackingPaused: true, goal: 14 });
   await statement('UPDATE users SET neutral=1,fsm=? WHERE id=?', '{"step":"habit.home","token":"legacy-fsm"}', id).run();
@@ -229,7 +230,7 @@ test('Медицинские экраны сохраняют профиль и �
   assert.match(await s.nav('history'), /Начало отслеживания/);
   assert.match(await s.nav('settings'), /Последнее употребление/);
   assert.match(await s.nav('awards'), /3 из 12/);
-  assert.match(await s.nav('craving'), /Важно про самочувствие[\s\S]+Что сейчас происходит/);
+  assert.match(await s.nav('craving'), /Что сейчас происходит[\s\S]+При симптомах отмены/);
   const manual = await s.receive('/morning');
   assert.match(manual, /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
   assert.match(manual, /При симптомах отмены/);
@@ -239,16 +240,19 @@ test('Медицинские экраны сохраняют профиль и �
   assert.deepEqual(after.intervals, before.intervals);
   assert.equal(after.neutral, true);
   assert.deepEqual(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), job);
-  let sent = 0;
-  await tick({ ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id) }, now, async () => sent++);
-  assert.equal(sent, 0);
-  assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), null);
+  const sent = [];
+  await tick({ ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id) }, now, async (_, __, body) => sent.push(body.text));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /Твой отчёт/);
+  assert.doesNotMatch(sent[0], /Факт о здоровье|Идея дня/);
+  assert.ok(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id));
   const stored = JSON.parse((await get('SELECT profile FROM users WHERE id=?', id)).profile);
   assert.equal(stored.trackingPaused, undefined);
   assert.equal(stored.medicalHold, true);
   await s.nav('edit.push');
   await s.press('Обычный отчёт');
   assert.deepEqual(JSON.parse((await get('SELECT profile FROM users WHERE id=?', id)).profile), stored);
+  await statement("DELETE FROM delivery_jobs WHERE user_id=? ", id).run();
 });
 
 test('Эпизод: пауза, повторная проверка безопасности, новая серия, коррекция и удаление', async () => {
@@ -505,19 +509,19 @@ test('Приватное превью обратимо и не снимает м
   const state = await load(db, id);
   const explicit = await s.receive('/morning');
   assert.match(explicit, /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
-  assert.equal(await s.nav('morning.preview'), 'Автоматическая отправка на паузе.');
+  assert.equal(await s.nav('morning.preview'), 'Твой отчёт готов');
   const push = report(state, now, id, today(now, 'UTC'), { automatic: true });
-  assert.equal(push.text, 'Автоматическая отправка на паузе.');
+  assert.equal(push.text, 'Твой отчёт готов');
   await s.nav('edit.push');
   await s.press('Обычный отчёт');
-  assert.equal(await s.nav('morning.preview'), 'Автоматическая отправка на паузе.');
-  assert.match(await s.nav('craving'), /Важно про самочувствие[\s\S]+Что сейчас происходит/);
+  assert.match(await s.nav('morning.preview'), /Твой отчёт/);
+  assert.match(await s.nav('craving'), /Что сейчас происходит[\s\S]+При симптомах отмены/);
   assert.deepEqual((await load(db, id)).profile, { ...state.profile, privatePush: false });
   assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), null);
   await s.nav('edit.push');
   await s.press('Нейтральное сообщение');
   assert.deepEqual((await load(db, id)).profile, state.profile);
-  assert.equal(await s.nav('morning.preview'), 'Автоматическая отправка на паузе.');
+  assert.equal(await s.nav('morning.preview'), 'Твой отчёт готов');
   assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), null);
 });
 
@@ -754,10 +758,11 @@ test('Cron освобождает пачку от недействительны
   ]);
   const sent = [];
   await tick(env(), now, async (_, __, body) => sent.push(body.chat_id));
-  assert.deepEqual(sent.filter(id => id >= 131 && id <= 135), []);
+  assert.deepEqual(sent.filter(id => id >= 131 && id <= 135), [132]);
   const remaining = (await statement('SELECT user_id,slot FROM delivery_jobs WHERE user_id BETWEEN 131 AND 135').all()).results;
-  assert.deepEqual(remaining, [{ user_id: 135, slot: now + DAY }]);
-  assert.equal(await get('SELECT * FROM delivery_receipts WHERE user_id BETWEEN 131 AND 135'), null);
+  assert.deepEqual(remaining, [{ user_id: 132, slot: now + DAY }, { user_id: 135, slot: now + DAY }]);
+  assert.equal(await get('SELECT * FROM delivery_receipts WHERE user_id BETWEEN 131 AND 135 AND user_id<>132'), null);
+  await statement('DELETE FROM delivery_jobs WHERE user_id=132').run();
 });
 
 test('Старое недельное расписание без дней приостановлено до выбора пользователя', async () => {
@@ -1063,7 +1068,7 @@ for (const [id, frequency] of [[169, 'daily'], [170, 'weekly'], [171, 'off']]) {
 }
 
 for (const [id, flag] of [[172, 'medicalHold'], [173, 'neutral'], [174, 'trackingPaused']]) {
-  test('Медицинская пауза ' + flag + ': время и приватность сохраняются без создания задания', async () => {
+  test('Медицинский флаг ' + flag + ': согласие создаёт задание', async () => {
     const s = session(id);
     await seed([id], { frequency: 'off', ...(flag === 'neutral' ? {} : { [flag]: true }) });
     await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
@@ -1071,13 +1076,7 @@ for (const [id, flag] of [[172, 'medicalHold'], [173, 'neutral'], [174, 'trackin
     await s.nav('notifications');
     await s.press('Подключить ежедневные отчёты');
     const result = await s.press('06:00');
-    assert.match(result, /Время отчёта сохранено[\s\S]*Автоматическая доставка ограничена по соображениям безопасности[\s\S]*Ручной отчёт доступен/);
-    assert.doesNotMatch(result, /Следующий отчёт|подключён/);
-    s.findButton('📊 Мой прогресс');
-    s.findButton('⚕️ Почему отчёты на паузе?');
-    s.findButton('⚕️ Медицинская помощь');
-    await s.press('⚕️ Почему отчёты на паузе?');
-    assert.match(s.messages()[0].text, /Медицинская пауза[\s\S]+не является диагнозом/);
+    assert.match(result, /Ежедневный отчёт подключён[\s\S]*Следующий отчёт/);
     await s.nav('edit.push');
     await s.press('Нейтральное сообщение');
     await s.receive('/start');
@@ -1088,8 +1087,8 @@ for (const [id, flag] of [[172, 'medicalHold'], [173, 'neutral'], [174, 'trackin
     assert.equal(neutral, flag === 'neutral');
     assert.equal(Boolean(profile.medicalHold), flag !== 'neutral');
     assert.equal(profile.trackingPaused, undefined);
-    assert.equal(job, null);
-    assert.match(await s.nav('notifications'), /Автоматическая доставка ограничена/);
+    assert.ok(job);
+    assert.match(await s.nav('notifications'), /Следующий отчёт/);
     assert.match(await s.nav('recovery'), /Текущий период[\s\S]+При симптомах отмены/);
     assert.match(await s.receive('/morning'), /Следующий рубеж[\s\S]*Идея дня[\s\S]*При симптомах отмены/);
     assert.match(await s.press('⚕️ Мне плохо'), /Немедленно вызови скорую/);
@@ -1125,7 +1124,7 @@ test('Оба сохранённых флага: 23 дня 20 часов, пол�
   await s.press('🚑 Экстренная помощь');
   assert.match(s.messages()[0].text, /Немедленно вызови скорую/);
   assert.match(await s.press('Главное меню'), /Мой прогресс/);
-  assert.match(await s.nav('notifications'), /Подписка: выключена[\s\S]+Предпочтительное время[\s\S]+Автоматическая доставка ограничена/);
+  assert.match(await s.nav('notifications'), /Подписка: выключена[\s\S]+Предпочтительное время/);
   assert.doesNotMatch(s.messages()[0].text, /Следующий отчёт:/);
   const after = await load(db, id);
   for (const key of ['profile', 'neutral', 'intervals', 'episodes', 'habits', 'job']) assert.deepEqual(after[key], before[key]);
@@ -1188,8 +1187,8 @@ test('/admin считает подписку на медицинской пау�
   await s.nav('edit.subscribe');
   await s.press('06:00');
   const after = await counts();
-  assert.deepEqual(after, [before[0], before[1], before[2] + 1, 0]);
-  assert.equal(await get('SELECT 1 FROM delivery_jobs WHERE user_id=?', id), null);
+  assert.deepEqual(after, [before[0], before[1], before[2] + 1, 1]);
+  assert.ok(await get('SELECT 1 FROM delivery_jobs WHERE user_id=?', id));
 });
 
 test('При открытом эпизоде время сохраняется без обещания отправки', async () => {
@@ -1249,7 +1248,7 @@ test('Навигация v2.4.1: отмена эпизода, устаревши
 
   const after = await load(db, id);
   assert.deepEqual(after.profile, { ...before.profile, clock: '09:00' });
-  assert.equal(after.job, null);
+  assert.ok(after.job);
   assert.equal(after.episodes.length, 0);
 });
 
@@ -1280,4 +1279,31 @@ test('200 синтетических профилей, общий слот, ко
   const plan = await statement('EXPLAIN QUERY PLAN SELECT * FROM delivery_jobs WHERE next_due_at<=? ORDER BY next_due_at,user_id LIMIT 8', now).all();
   assert.match(plan.results.map(row => row.detail).join(' '), /due_jobs/);
   t.diagnostic('200/200 уникальных локальных отправок, 20 параллельных обновлений, ' + Math.round(performance.now() - start) + ' мс');
+});
+
+test('06:00 МСК: сохранённый риск не мешает Cron отправить статистику и записать квитанцию', async t => {
+  const id = 157, s = session(id);
+  await seed([id], { frequency: 'daily', zone: 'Europe/Moscow', historyZone: 'Europe/Moscow', medicalHold: true });
+  await statement('UPDATE users SET neutral=1 WHERE id=?', id).run();
+  await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
+  await s.nav('notifications');
+  await s.press('Изменить время');
+  assert.match(await s.press('06:00'), /Следующий отчёт: 11\.03\.2026, 06:00/);
+  const next = Date.parse('2026-03-11T03:00Z');
+  assert.deepEqual((await load(db, id)).job, { next_due_at: next, slot: next });
+  const sent = [];
+  const closed = { ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id) };
+  const log = t.mock.method(console, 'info', () => {});
+  for (let i = 0; i < 4 && !sent.length; i++) await tick(closed, next, async (_, method, body) => {
+    assert.equal(method, 'sendMessage');
+    sent.push(body);
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].chat_id, id);
+  assert.match(sent[0].text, /Твой отчёт[\s\S]+Всего трезвых дней/);
+  assert.doesNotMatch(sent[0].text, /Факт о здоровье|Идея дня|поздрав/i);
+  assert.equal((await get('SELECT status FROM delivery_receipts WHERE user_id=? AND local_day=?', id, '2026-03-11')).status, 'sent');
+  assert.equal((await load(db, id)).job.slot, next + DAY);
+  await tick({ ...closed, TELEGRAM_TOKEN: '' }, next, async () => assert.fail('Unexpected send'));
+  assert.deepEqual(JSON.parse(log.mock.calls.at(-1).arguments[0]), { event: 'delivery_skipped', reason: 'missing_configuration' });
 });

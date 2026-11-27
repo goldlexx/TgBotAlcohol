@@ -73,12 +73,11 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
     const owner = env.OWNER_CHAT_ID ?? (env.CLOSED_TEST === '1' && env.OWNER_IS_CLOSED_CHAT === '1' ? env.ALLOWED_CHAT_IDS.trim() : null);
     if (owner !== String(input.id)) return empty();
     const counts = await first(env.DB, `WITH profiles AS (
-      SELECT id,profile,neutral,json_extract(profile,'$.frequency') AS frequency FROM users
+      SELECT id,profile,json_extract(profile,'$.frequency') AS frequency FROM users
     ) SELECT count(*) AS total, count(profile) AS registered,
       count(*) FILTER (WHERE frequency IN ('daily','selected','weekly','milestones')) AS subscribed,
       count(*) FILTER (WHERE frequency IN ('daily','selected','weekly','milestones')
         AND instr(',' || ? || ',', ',' || id || ',')>0
-        AND neutral=0 AND coalesce(json_extract(profile,'$.medicalHold'),json_extract(profile,'$.trackingPaused'),0)=0
         AND EXISTS(SELECT 1 FROM abstinence_intervals WHERE user_id=profiles.id AND end IS NULL)
         AND EXISTS(SELECT 1 FROM delivery_jobs WHERE user_id=profiles.id AND slot>=?)
         AND (frequency NOT IN ('weekly','selected') OR (

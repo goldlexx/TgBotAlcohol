@@ -3,16 +3,17 @@ import { achievements, reached } from './calculations.js';
 import { FRESH, slotFor } from './schedule.js';
 import { report } from './views.js';
 import { DAY, today, hasReportDays } from './time.js';
-import { hasMedicalRisk } from './safety.js';
 import { allowed, message, telegram, TelegramError } from './telegram.js';
 
 export const BATCH = 8;
+
+const skipped = reason => console.info(JSON.stringify({ event: 'delivery_skipped', reason }));
 
 async function deliver(env, job, now, api) {
   const db = env.DB, id = job.user_id;
   if (!allowed(env, id)) {
     await stmt(db, 'DELETE FROM delivery_jobs WHERE user_id=? AND next_due_at=? AND slot=?', id, job.next_due_at, job.slot).run();
-    return;
+    return skipped('not_allowed');
   }
   const state = await load(db, id);
   const p = state.profile;
@@ -20,10 +21,12 @@ async function deliver(env, job, now, api) {
   const matchesUser = 'EXISTS(SELECT 1 FROM users WHERE id=? AND delivery_epoch=? AND generation=?)';
   if (!state.user) return; // Jobs have an ON DELETE CASCADE foreign key.
   const { delivery_epoch: epoch, generation } = state.user;
-  if (!p || hasMedicalRisk(state) || p.frequency === 'off' || !hasReportDays(p) || series?.end !== null) {
+  const ineligible = !p ? 'no_profile' : p.frequency === 'off' ? 'subscription_off'
+    : !hasReportDays(p) ? 'missing_report_days' : series?.end !== null ? 'no_active_series' : null;
+  if (ineligible) {
     await stmt(db, 'DELETE FROM delivery_jobs WHERE user_id=? AND next_due_at=? AND slot=? AND ' + matchesUser,
       id, job.next_due_at, job.slot, id, epoch, generation).run();
-    return;
+    return skipped(ineligible);
   }
   const seriesId = state.episodes.at(-1)?.id ?? 0;
   const localDate = today(job.slot, p.zone);
@@ -57,11 +60,11 @@ async function deliver(env, job, now, api) {
     if (String(error).includes('CHECK constraint failed')) return;
     throw error;
   }
-  if (!ready) return;
+  if (!ready) return skipped(!fresh ? 'slot_expired' : !available ? 'already_processed' : 'no_milestone');
   const outgoing = message(id, report(state, now, id, localDate, {
     automatic: true, milestone, afterEpisode: seriesId !== 0 && !previous.previous_report
   }));
-  if (!await first(db, 'SELECT 1 FROM users WHERE id=? AND delivery_epoch=? AND generation=?', id, epoch, generation)) return;
+  if (!await first(db, 'SELECT 1 FROM users WHERE id=? AND delivery_epoch=? AND generation=?', id, epoch, generation)) return skipped('state_changed');
   let status = 'sent', retry = null;
   try {
     await api(env, 'sendMessage', outgoing);
@@ -84,10 +87,11 @@ async function deliver(env, job, now, api) {
     finish.push(stmt(db, "UPDATE users SET rev=rev+1,delivery_epoch=delivery_epoch+1,profile=json_set(profile,'$.frequency','off') WHERE id=? AND delivery_epoch=? AND generation=?", id, epoch, generation));
   }
   await db.batch(finish);
+  if (status !== 'sent') skipped('telegram_' + status);
 }
 
 export async function tick(env, now = Date.now(), api = telegram) {
-  if (!env.TELEGRAM_TOKEN || !env.ALLOWED_CHAT_IDS) return;
+  if (!env.TELEGRAM_TOKEN || !env.ALLOWED_CHAT_IDS) return skipped('missing_configuration');
   const db = env.DB;
   const due = await stmt(db, 'SELECT * FROM delivery_jobs WHERE next_due_at<=? ORDER BY next_due_at,user_id LIMIT ?', now, BATCH).all();
   const outcomes = await Promise.allSettled(due.results.map(job => deliver(env, job, now, api)));

@@ -54,7 +54,7 @@ test('Все подборки проходят полный цикл без см
   }
   const neutralCrave = view('crave.work', { ...state, neutral: true }, now, 1).text;
   assert.match(neutralCrave, /Попробуй сейчас/);
-  assert.match(neutralCrave, /Важно про самочувствие/);
+  assert.match(neutralCrave, /При симптомах отмены/);
 });
 
 test('Текст и клавиатуры отделяют медицинскую помощь от статистики и советов', () => {
@@ -373,18 +373,14 @@ test('Матрица 10 медицинских состояний: доступ�
     assert.match(view('morning', sample, now, 1).text, sample.profile ? /Утренний отчёт|Доброе утро|Отчёт|Паузе|паузе/i : /Начни отслеживание/, name);
     assert.ok(view('help', sample, now, 1).buttons.flat().some(b => b.callback_data === 'n:menu'), name);
   }
-  const medPause = view('medicalPause', make({ neutral: true, profile: { medicalHold: true } }), now, 1);
-  assert.match(medPause.text, /не является диагнозом[\s\S]+Хочу выпить[\s\S]+\/morning/);
-  assert.doesNotMatch(medPause.text, /медицинский флаг|ранних версиях|врачебного согласования/i);
-  assert.ok(medPause.buttons.flat().some(b => b.callback_data === 'n:craving'));
-  assert.ok(medPause.buttons.flat().some(b => b.callback_data === 'n:notifications'));
+  assert.match(view('medicalPause', make({ neutral: true, profile: { medicalHold: true } }), now, 1).text, /Уведомления/);
 });
 
 test('v2.4.1 полировка: единое предупреждение тяги, 60 карточек, чистый язык восстановления и объяснение версий', () => {
   const med = { ...seriesState(23), profile: { ...state.profile, medicalHold: true }, neutral: true };
   for (const route of ['craving', 'crave.work', 'crave.stress']) {
     const out = view(route, med, now, 1);
-    assert.equal((out.text.match(/физически плохо/g) ?? []).length, 1);
+    assert.equal((out.text.match(/При симптомах отмены/g) ?? []).length, 1);
     assert.doesNotMatch(out.text, /медицинский флаг|в профиле сохранена медицинская пауза/i);
   }
   const normalCrave = view('craving', state, now, 1);
@@ -424,7 +420,7 @@ test('v2.4.1 полировка: единое предупреждение тя�
   assert.match(detText, /5,22 л пива/);
   assert.match(detText, /по версиям привычки с даты их сохранения/);
   assert.match(view('method.details', ownerLike, tNow, 1).text, /по своей версии/);
-  for (const from of ['physical', 'help', 'medicalPause']) {
+  for (const from of ['physical', 'help']) {
     assert.ok(view('care.' + from, med, now, 1).buttons.flat().some(b => b.callback_data === 'n:' + from));
   }
 });
