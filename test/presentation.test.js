@@ -424,3 +424,17 @@ test('v2.4.1 полировка: единое предупреждение тя�
     assert.ok(view('care.' + from, med, now, 1).buttons.flat().some(b => b.callback_data === 'n:' + from));
   }
 });
+
+test('Медицинские экраны в формах безопасности добавляют возврат без потери приоритета помощи', () => {
+  for (const step of ['check', 'background', 'paused']) {
+    const active = { ...state, fsm: { step, flow: 'complete', start: now - DAY, token: 'tok1' } };
+    const em = view('emergency', active, now, 1);
+    assert.deepEqual(em.buttons.map(r => r.map(b => b.callback_data)), [['n:resume'], ['n:menu']]);
+    const ph = view('physical', active, now, 1);
+    assert.equal(ph.buttons[0][0].callback_data, 'n:emergency');
+    assert.ok(ph.buttons.flat().some(b => b.callback_data === 'n:resume'));
+    const careHelp = view('care.help', active, now, 1);
+    assert.equal(careHelp.buttons[0][0].callback_data, 'n:emergency');
+    assert.ok(careHelp.buttons.flat().some(b => b.callback_data === 'n:resume'));
+  }
+});

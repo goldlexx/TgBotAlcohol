@@ -258,7 +258,11 @@ export function handleHabit(f, enter, action, input, commit) {
       if (input) {
         const amount = money(input, f.currency);
         if (f.budgetType === 'once') {
-          go(f.mode === 'calendar' ? 'days' : 'freq', { draft: { ...draft(), drink: 'budget', price: amount }, single: false });
+          go(f.mode === 'calendar' ? 'days' : 'freq', {
+            draft: { ...draft(), ...f.draft, drink: 'budget', price: amount,
+              days: f.mode === 'calendar' ? (Array.isArray(f.draft?.days) ? f.draft.days : []) : null },
+            single: false
+          });
         } else {
           go('review', { budget: amount, budgetPeriod: Number(f.budgetType),
             entries: f.entries.filter(row => row.drink !== 'budget').map(row => ({ ...row, price: null })) });

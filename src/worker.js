@@ -3,7 +3,7 @@ import { screen, sections } from './views.js';
 import { first, load, save, saveAwards } from './storage.js';
 import { achievements } from './calculations.js';
 import { allowed, message, telegram } from './telegram.js';
-import { tick } from './scheduler.js';
+import { tick, deliverOutbox } from './scheduler.js';
 import { FRESH } from './schedule.js';
 
 const encoder = new TextEncoder();
@@ -64,6 +64,17 @@ function limited(id, now) {
   return count > 24;
 }
 
+function payloads(id, response) {
+  if (!response) return [];
+  const keyboard = response.keyboard && {
+    keyboard: sections.map(row => row.map(([text]) => ({ text }))),
+    resize_keyboard: true, is_persistent: true
+  };
+  const list = [message(id, { ...response, keyboard })];
+  if (response.followup) list.push(message(id, response.followup));
+  return list;
+}
+
 export async function webhook(request, env, now = Date.now(), api = telegram) {
   if (!await authenticated(request, env.WEBHOOK_SECRET)) return new Response(null, { status: 403 });
   const input = extract(await parseUpdate(request));
@@ -95,7 +106,7 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
     return empty();
   }
   const subject = await subjectFor(input.id, env.WEBHOOK_SECRET);
-  let response;
+  let response, queued = [], deleted = false;
   for (let attempt = 0; attempt < 5; attempt++) {
     const state = await load(env.DB, input.id, input.updateId, subject, now);
     if (state.duplicate) return empty();
@@ -103,8 +114,10 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
     if (response.accrueAwards && state.profile && !state.timelineChanged) {
       saveAwards(state, input.id, achievements(state.intervals, now));
     }
+    const outbox = state.deleted ? [] : payloads(input.id, response);
     try {
-      await save(env.DB, input.id, state, input.updateId, subject, now);
+      queued = await save(env.DB, input.id, state, input.updateId, subject, now, outbox);
+      deleted = Boolean(state.deleted);
       break;
     } catch (error) {
       if (attempt === 4 || !/constraint failed/i.test(String(error))) return new Response(null, { status: 503 });
@@ -113,12 +126,19 @@ export async function webhook(request, env, now = Date.now(), api = telegram) {
   }
   if (response) {
     const ack = input.callbackId ? api(env, 'answerCallbackQuery', { callback_query_id: input.callbackId }).catch(() => {}) : null;
-    try {
-      const keyboard = response.keyboard && { keyboard: sections.map(row => row.map(([text]) => ({ text }))), resize_keyboard: true, is_persistent: true };
-      await api(env, 'sendMessage', message(input.id, { ...response, keyboard }));
-      if (response.followup) await api(env, 'sendMessage', message(input.id, response.followup));
-    } catch {
-      // The update is committed. Replaying it could duplicate a message whose delivery is unknown.
+    if (deleted) {
+      for (const body of payloads(input.id, response)) {
+        try { await api(env, 'sendMessage', body); } catch {}
+      }
+    } else {
+      for (const row of queued) {
+        try {
+          if (await deliverOutbox(env, row, now, api) !== 'sent') break;
+        } catch {
+          // The reply stays queued in delivery_outbox for Cron recovery.
+          break;
+        }
+      }
     }
     await ack;
   }

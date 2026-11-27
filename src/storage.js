@@ -40,7 +40,7 @@ export function guard(db, condition, ...args) {
   return stmt(db, 'INSERT INTO transaction_guard(ok) SELECT 0 WHERE NOT (' + condition + ')', ...args);
 }
 
-export async function save(db, id, state, updateId, subject, now) {
+export async function save(db, id, state, updateId, subject, now, outbox = []) {
   const old = state.user;
   const batch = [];
   const add = (sql, ...args) => batch.push(stmt(db, sql, ...args));
@@ -58,8 +58,13 @@ export async function save(db, id, state, updateId, subject, now) {
       add('UPDATE users SET rev=rev+1,fsm=?,profile=?,neutral=? WHERE id=?', JSON.stringify(state.fsm), state.profile && JSON.stringify(state.profile), Number(state.neutral), id);
     }
     for (const [sql, ...args] of state.writes) add(sql, ...args);
+    for (const [sequence, body] of outbox.entries()) {
+      add("INSERT INTO delivery_outbox(user_id,update_id,sequence,body,status,due_at,attempts,lease_owner,created_at) VALUES (?,?,?,?,'ready',?,0,NULL,?) RETURNING id,user_id,update_id,sequence,body,status,due_at,attempts",
+        id, updateId, sequence, JSON.stringify(body), now, now);
+    }
   }
-  await db.batch(batch);
+  const results = await db.batch(batch);
+  return !state.deleted && outbox.length ? results.slice(-outbox.length).flatMap(row => row.results) : [];
 }
 
 export function saveTimeline(state, id, intervals) {

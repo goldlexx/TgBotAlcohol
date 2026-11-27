@@ -310,10 +310,17 @@ export function view(route, state, now, id) {
   switch (page) {
     case 'menu': return p ? view('progress', state, now, id) : welcome;
     case 'help': return { ...help, readOnly: true };
-    case 'emergency': return { ...emergencyView, readOnly: true };
-    case 'physical': return { ...physicalView, readOnly: true };
+    case 'emergency': {
+      const canResume = ['check', 'background', 'paused', 'episode', 'episodeConfirm'].includes(state.fsm?.step);
+      return { ...(canResume ? screen(emergencyView.text, back('resume'), menuButton) : emergencyView), readOnly: true };
+    }
+    case 'physical': {
+      const canResume = ['check', 'background', 'paused', 'episode', 'episodeConfirm'].includes(state.fsm?.step);
+      return { ...(canResume ? screen(physicalView.text, [helpButtons[1]], careButton('physical'), back('resume'), menuButton) : physicalView), readOnly: true };
+    }
     case 'care': {
-      const returnRoute = ['help', 'physical'].includes(arg) ? arg : null;
+      const canResume = ['check', 'background', 'paused', 'episode', 'episodeConfirm'].includes(state.fsm?.step);
+      const returnRoute = arg === 'help' && canResume ? 'resume' : ['help', 'physical'].includes(arg) ? arg : null;
       return { ...screen('⚕️ **Куда обратиться**\n\n' + careSteps +
         '\n\n• **Россия:** горячая линия Минздрава России `8 800 2000 200` (бесплатно, в том числе по отказу от алкоголя); портал Минздрава «Так здорово»; памятка МЧС о вызове скорой (112/103). Помощь при зависимости можно обсудить с врачом-наркологом.\n' +
         '• **Группы взаимопомощи (не являются медицинской организацией):** «Анонимные алкоголики» (Россия и международный поиск). При физических симптомах нужна медицинская помощь.',

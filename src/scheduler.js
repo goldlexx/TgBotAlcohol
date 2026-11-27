@@ -6,8 +6,82 @@ import { DAY, today, hasReportDays } from './time.js';
 import { allowed, message, telegram, TelegramError } from './telegram.js';
 
 export const BATCH = 8;
+const LEASE = 120_000;
 
 const skipped = reason => console.info(JSON.stringify({ event: 'delivery_skipped', reason }));
+
+export function outboxOutcome(error, attempts, now) {
+  if (!error) return { status: 'sent', retry: null };
+  if (error instanceof TelegramError) {
+    if (error.code === 429 && attempts < 4) {
+      return { status: 'retry', retry: now + Math.max(60_000, (Number(error.retry) || 0) * 1000) };
+    }
+    if (error.code >= 500 && attempts < 3) {
+      return { status: 'retry', retry: now + 60_000 * attempts };
+    }
+    if (error.code === 403) return { status: 'blocked', retry: null };
+    if (error.code > 0 && error.code < 500) return { status: 'rejected', retry: null };
+  }
+  return { status: 'unknown', retry: null };
+}
+
+export async function deliverOutbox(env, row, now, api = telegram) {
+  const db = env.DB;
+  if (!allowed(env, row.user_id)) {
+    await stmt(db, 'DELETE FROM delivery_outbox WHERE id=?', row.id).run();
+    skipped('outbox_not_allowed');
+    return 'not_allowed';
+  }
+  const lease = crypto.randomUUID();
+  const claimed = await first(db, `UPDATE delivery_outbox
+    SET status='sending', attempts=attempts+1, due_at=?, lease_owner=?
+    WHERE id=? AND status IN ('ready','retry','sending') AND due_at<=?
+      AND NOT EXISTS(
+        SELECT 1 FROM delivery_outbox p
+        WHERE p.user_id=delivery_outbox.user_id AND p.id<delivery_outbox.id
+          AND p.status IN ('ready','retry','sending')
+      )
+    RETURNING *`, now + LEASE, lease, row.id, now);
+  if (!claimed) return null;
+
+  let outcome;
+  if (row.status === 'sending') {
+    // A previous invocation claimed this item and died before recording the result.
+    outcome = { status: 'unknown', retry: null };
+  } else {
+    let error = null;
+    try {
+      await api(env, 'sendMessage', JSON.parse(claimed.body));
+    } catch (err) {
+      error = err;
+    }
+    outcome = outboxOutcome(error, claimed.attempts, now);
+  }
+
+  if (outcome.status === 'sent') {
+    await stmt(db, 'DELETE FROM delivery_outbox WHERE id=? AND lease_owner=?', claimed.id, lease).run();
+    return 'sent';
+  }
+  if (outcome.retry !== null) {
+    await stmt(db, 'UPDATE delivery_outbox SET status=?, due_at=?, lease_owner=NULL WHERE id=? AND lease_owner=?',
+      outcome.status, outcome.retry, claimed.id, lease).run();
+    skipped('outbox_' + outcome.status);
+    return outcome.status;
+  }
+  if (outcome.status === 'blocked') {
+    await db.batch([
+      stmt(db, 'DELETE FROM delivery_outbox WHERE user_id=?', claimed.user_id),
+      stmt(db, 'DELETE FROM delivery_jobs WHERE user_id=?', claimed.user_id),
+      stmt(db, "UPDATE users SET rev=rev+1,delivery_epoch=delivery_epoch+1,profile=CASE WHEN profile IS NULL THEN NULL ELSE json_set(profile,'$.frequency','off') END WHERE id=?", claimed.user_id)
+    ]);
+    skipped('outbox_blocked');
+    return 'blocked';
+  }
+  await stmt(db, 'UPDATE delivery_outbox SET status=?, lease_owner=NULL WHERE id=? AND lease_owner=?',
+    outcome.status, claimed.id, lease).run();
+  skipped('outbox_' + outcome.status);
+  return outcome.status;
+}
 
 async function restoreJobs(env, now, limit) {
   const db = env.DB;
@@ -132,11 +206,24 @@ export async function tick(env, now = Date.now(), api = telegram) {
   if (!env.TELEGRAM_TOKEN || !env.ALLOWED_CHAT_IDS) return skipped('missing_configuration');
   const db = env.DB;
   const due = await stmt(db, 'SELECT * FROM delivery_jobs WHERE next_due_at<=? ORDER BY next_due_at,user_id LIMIT ?', now, BATCH).all();
-  const outcomes = await Promise.allSettled(due.results.map(job => deliver(env, job, now, api)));
+  const remaining = BATCH - due.results.length;
+  const out = remaining > 0 ? await stmt(db, `SELECT o.* FROM delivery_outbox o
+    WHERE o.status IN ('ready','retry','sending') AND o.due_at<=?
+      AND NOT EXISTS(
+        SELECT 1 FROM delivery_outbox p
+        WHERE p.user_id=o.user_id AND p.id<o.id AND p.status IN ('ready','retry','sending')
+      )
+    ORDER BY o.due_at, o.id LIMIT ?`, now, remaining).all() : { results: [] };
+  const outcomes = await Promise.allSettled([
+    ...due.results.map(job => deliver(env, job, now, api)),
+    ...out.results.map(row => deliverOutbox(env, row, now, api))
+  ]);
   if (Math.floor(now / 60_000) % 60 === 0) await db.batch([
     stmt(db, 'DELETE FROM update_dedup WHERE rowid IN (SELECT rowid FROM update_dedup WHERE created_at<? ORDER BY created_at LIMIT 1000)', now - 7 * DAY),
-    stmt(db, 'DELETE FROM deletion_markers WHERE subject IN (SELECT subject FROM deletion_markers WHERE expires_at<=? ORDER BY expires_at LIMIT 200)', now)
+    stmt(db, 'DELETE FROM deletion_markers WHERE subject IN (SELECT subject FROM deletion_markers WHERE expires_at<=? ORDER BY expires_at LIMIT 200)', now),
+    stmt(db, 'DELETE FROM delivery_outbox WHERE id IN (SELECT id FROM delivery_outbox WHERE created_at<? ORDER BY created_at LIMIT 200)', now - 7 * DAY)
   ]);
   if (outcomes.some(result => result.status === 'rejected')) throw new Error('Scheduled delivery failed');
-  if (due.results.length < BATCH) await restoreJobs(env, now, BATCH - due.results.length);
+  const total = due.results.length + out.results.length;
+  if (total < BATCH) await restoreJobs(env, now, BATCH - total);
 }

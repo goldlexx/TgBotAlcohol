@@ -15,7 +15,7 @@ import { today } from '../src/time.js';
 const now = Date.parse('2026-03-10T08:00Z');
 const secret = 'local-synthetic-only';
 const idRange = Array.from({ length: 200 }, (_, i) => 800_000 + i);
-const chats = [...Array.from({ length: 81 }, (_, i) => 100 + i), ...idRange];
+const chats = [...Array.from({ length: 95 }, (_, i) => 100 + i), ...idRange];
 const fakeEnv = { WEBHOOK_SECRET: secret, TELEGRAM_TOKEN: 'local-stub', ALLOWED_CHAT_IDS: chats.join(',') };
 let mf, db, seq = 1000;
 const statement = (sql, ...args) => db.prepare(sql).bind(...args);
@@ -41,6 +41,8 @@ before(async () => {
   ]);
   const migration = await readFile(new URL('../migrations/0002_habit_drink.sql', import.meta.url), 'utf8');
   await db.batch([statement(migration)]);
+  const outboxMigration = await readFile(new URL('../migrations/0003_delivery_outbox.sql', import.meta.url), 'utf8');
+  await db.batch(outboxMigration.split(';').map(s => s.trim()).filter(Boolean).map(s => statement(s)));
 });
 after(async () => mf?.dispose());
 
@@ -932,7 +934,7 @@ test('Коррекция серии и удаление меняют тольк�
   await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
 });
 
-test('Открытие контента тратит 10 SQL-операторов вместо 21, новые награды записываются один раз', async t => {
+test('Открытие контента тратит 11 SQL-операторов в batch (с outbox), новые награды записываются один раз', async t => {
   const id = 146;
   await seed([id], { frequency: 'off' });
   const base = now - 1830 * DAY;
@@ -946,17 +948,17 @@ test('Открытие контента тратит 10 SQL-операторов
   for (const route of ['life', 'life.evening.1', 'craving', 'recovery', 'settings', 'history', 'details']) {
     count = 0;
     assert.equal((await visit(route)).status, 204);
-    assert.equal(count, 10);
+    assert.equal(count, 11);
     assert.equal(awards, 0);
   }
   await visit('progress');
   assert.equal(awards, 12);
   count = 0;
   await visit('awards');
-  assert.equal(count, 10);
+  assert.equal(count, 11);
   assert.equal(awards, 12);
   await statement('DELETE FROM delivery_jobs WHERE user_id=?', id).run();
-  t.diagnostic('21 → 10 SQL-операторов при просмотре контента, 12 → 0 повторных INSERT в достижения.');
+  t.diagnostic('21 → 11 SQL-операторов в batch при просмотре контента (с атомарным outbox), 12 → 0 повторных INSERT в достижения.');
 });
 
 test('/admin авторизует числовой ID и возвращает агрегаты без изменений данных', async () => {
@@ -1377,4 +1379,283 @@ test('Bootstrap не восстанавливает задание после с
   const state = await load(db, id);
   assert.equal(state.profile.frequency, 'off');
   assert.equal(state.job, null);
+});
+
+test('v2.4.4 delivery_outbox: атомарное сохранение, ретраи 5xx/429, FIFO и дедупликация', async () => {
+  const id = 181, s = session(id);
+  await onboard(s);
+  const t0 = now + 10_000;
+  const uid1 = seq++;
+  const fail502 = async (_, method) => {
+    if (method === 'answerCallbackQuery') throw new TelegramError(400);
+    throw new TelegramError(502);
+  };
+  assert.equal((await webhook(request(id, '/start', { updateId: uid1 }), env(), t0, fail502)).status, 204);
+  const rows1 = (await statement('SELECT * FROM delivery_outbox WHERE user_id=? ORDER BY id', id).all()).results;
+  assert.equal(rows1.length, 2);
+  assert.equal(rows1[0].update_id, uid1);
+  assert.equal(rows1[0].status, 'retry');
+  assert.equal(rows1[0].attempts, 1);
+  assert.equal(rows1[0].due_at, t0 + 60_000);
+  assert.equal(rows1[1].status, 'ready');
+  assert.ok(await get('SELECT update_id FROM update_dedup WHERE user_id=? AND update_id=?', id, uid1));
+
+  let resent = 0;
+  assert.equal((await webhook(request(id, '/start', { updateId: uid1 }), env(), t0 + 1_000, async () => { resent++; })).status, 204);
+  assert.equal(resent, 0);
+  const afterDedup = (await statement('SELECT * FROM delivery_outbox WHERE user_id=? ORDER BY id', id).all()).results;
+  assert.equal(afterDedup.length, rows1.length);
+
+  // Второй апдейт при незавершённом первом не обгоняет голову очереди
+  const delivered = [];
+  const uid2 = seq++;
+  assert.equal((await webhook(request(id, { callback: 'n:settings' }, { updateId: uid2 }), env(), t0 + 2_000, async (_, method, body) => {
+    if (method === 'answerCallbackQuery') throw new TelegramError(400);
+    delivered.push(body.text);
+  })).status, 204);
+  assert.equal(delivered.length, 0);
+
+  await tick(env(), t0 + 30_000, async () => assert.fail('Early tick must not send before due_at'));
+
+  // Неудачный 429 retry_after (меньше минуты -> минимум 60с; больше минуты -> retry_after)
+  await tick(env(), t0 + 60_000, async () => { throw new TelegramError(429, 95); });
+  const after429 = await get('SELECT * FROM delivery_outbox WHERE id=?', rows1[0].id);
+  assert.equal(after429.status, 'retry');
+  assert.equal(after429.attempts, 2);
+  assert.equal(after429.due_at, t0 + 60_000 + 95_000);
+
+  // Повторный 429 c малым retry_after -> минимум 60с, далее дренируем все 3 сообщения в строгом FIFO
+  await tick(env(), after429.due_at, async () => { throw new TelegramError(429, 5); });
+  const afterSmall429 = await get('SELECT * FROM delivery_outbox WHERE id=?', rows1[0].id);
+  assert.equal(afterSmall429.status, 'retry');
+  assert.equal(afterSmall429.attempts, 3);
+  assert.equal(afterSmall429.due_at, after429.due_at + 60_000);
+
+  for (let i = 0; i < 3; i++) {
+    await tick(env(), afterSmall429.due_at + i, async (_, method, body) => {
+      if (method === 'sendMessage') delivered.push(body.text);
+    });
+  }
+  assert.equal(delivered.length, 3);
+  assert.match(delivered[0], /Счастье без алкоголя/);
+  assert.match(delivered[1], /Мой прогресс/);
+  assert.match(delivered[2], /Настройки/);
+  assert.equal((await statement('SELECT * FROM delivery_outbox WHERE user_id=?', id).all()).results.length, 0);
+
+  // Граничный случай: 4 подряд ошибки 429 переводят задание в rejected
+  const uid3 = seq++;
+  const t429 = now + 300_000;
+  assert.equal((await webhook(request(id, '/privacy', { updateId: uid3 }), env(), t429, async () => {
+    throw new TelegramError(429, 10);
+  })).status, 204);
+  let row = await get('SELECT * FROM delivery_outbox WHERE user_id=? AND update_id=?', id, uid3);
+  assert.equal(row.status, 'retry');
+  for (let i = 2; i <= 4; i++) {
+    await tick(env(), row.due_at, async () => { throw new TelegramError(429, 10); });
+    row = await get('SELECT * FROM delivery_outbox WHERE id=?', row.id);
+  }
+  assert.equal(row.status, 'rejected');
+  assert.equal(row.attempts, 4);
+});
+
+test('v2.4.4 delivery_outbox: конкурентность, unknown, 403, очистка, /delete CASCADE и индекс', async () => {
+  const idConcurrent = 182, idUnknown = 183, idDelete = 184;
+  for (const id of [idConcurrent, idUnknown, idDelete]) await onboard(session(id), { notifications: true });
+  await statement('DELETE FROM delivery_jobs WHERE user_id IN (?,?,?)', idConcurrent, idUnknown, idDelete).run();
+
+  const plan = await get(`EXPLAIN QUERY PLAN SELECT * FROM delivery_outbox
+    WHERE status IN ('ready','retry','sending') AND due_at<=?
+    AND NOT EXISTS (SELECT 1 FROM delivery_outbox p WHERE p.user_id=delivery_outbox.user_id AND p.id<delivery_outbox.id AND p.status IN ('ready','retry','sending'))
+    ORDER BY due_at, id LIMIT 8`, now);
+  assert.match(plan.detail, /outbox_due/);
+
+  // Конкурентные tick() отправляют головное задание ровно один раз
+  const t0 = now + 20_000;
+  await webhook(request(idConcurrent, '/start', { updateId: seq++ }), env(), t0, async () => { throw new TelegramError(503); });
+  let concurrentSends = 0;
+  await Promise.all([
+    tick(env(), t0 + 60_000, async (_, method, body) => {
+      if (method === 'sendMessage' && body.chat_id === idConcurrent) {
+        concurrentSends++;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }),
+    tick(env(), t0 + 60_000, async (_, method, body) => {
+      if (method === 'sendMessage' && body.chat_id === idConcurrent) {
+        concurrentSends++;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    })
+  ]);
+  assert.equal(concurrentSends, 1);
+  await tick(env(), t0 + 60_001, async () => {});
+
+  // Неопределённый результат (TelegramError 0) и истёкший lease -> unknown без слепого повтора
+  const uidUnknown = seq++;
+  await webhook(request(idUnknown, '/privacy', { updateId: uidUnknown }), env(), t0, async () => { throw new TelegramError(0); });
+  const uRow = await get('SELECT * FROM delivery_outbox WHERE user_id=? AND update_id=?', idUnknown, uidUnknown);
+  assert.equal(uRow.status, 'unknown');
+  await tick(env(), t0 + 10_000_000, async () => assert.fail('Unknown outbox row must not retry blindly'));
+
+  await statement("INSERT INTO delivery_outbox(user_id,update_id,sequence,body,status,due_at,attempts,created_at) VALUES(?,?,?,?,?,?,?,?)",
+    idUnknown, seq++, 0, JSON.stringify({ chat_id: idUnknown, text: 'stale' }), 'sending', t0 - 1, 1, t0 - 200_000).run();
+  await tick(env(), t0 + 1_000, async () => assert.fail('Expired sending lease must move to unknown without resend'));
+  const expiredRow = await get('SELECT * FROM delivery_outbox WHERE user_id=? AND attempts=2', idUnknown);
+  assert.equal(expiredRow.status, 'unknown');
+
+  // Ошибка 403 выключает рассылку и очищает очередь
+  await webhook(request(idUnknown, '/privacy', { updateId: seq++ }), env(), t0 + 5_000, async () => { throw new TelegramError(502); });
+  await tick(env(), t0 + 65_000, async () => { throw new TelegramError(403); });
+  const after403 = await load(db, idUnknown);
+  assert.equal(after403.profile.frequency, 'off');
+  assert.equal((await statement('SELECT * FROM delivery_outbox WHERE user_id=?', idUnknown).all()).results.length, 0);
+
+  // Почасовая очистка удаляет только записи старше 7 дней
+  const hourExact = Math.ceil((now + 20 * DAY) / 3_600_000) * 3_600_000;
+  await statement("INSERT INTO delivery_outbox(user_id,update_id,sequence,body,status,due_at,attempts,created_at) VALUES(?,?,?,?,?,?,?,?)",
+    idConcurrent, seq++, 0, '{}', 'unknown', hourExact, 1, hourExact - 8 * DAY).run();
+  await statement("INSERT INTO delivery_outbox(user_id,update_id,sequence,body,status,due_at,attempts,created_at) VALUES(?,?,?,?,?,?,?,?)",
+    idConcurrent, seq++, 0, '{}', 'rejected', hourExact, 4, hourExact - 2 * DAY).run();
+  await tick(env(), hourExact, async () => {});
+  const left = (await statement('SELECT created_at FROM delivery_outbox WHERE user_id=?', idConcurrent).all()).results;
+  assert.equal(left.length, 1);
+  assert.equal(left[0].created_at, hourExact - 2 * DAY);
+
+  // Удаление аккаунта /delete каскадно удаляет delivery_outbox, но отправляет прощальное сообщение напрямую
+  await webhook(request(idDelete, '/privacy', { updateId: seq++ }), env(), t0, async () => { throw new TelegramError(502); });
+  await webhook(request(idDelete, '/delete', { updateId: seq++ }), env(), t0 + 500, async () => assert.fail('Pending head blocks direct send'));
+  const queuedDelete = (await statement('SELECT body FROM delivery_outbox WHERE user_id=? ORDER BY id', idDelete).all()).results;
+  assert.equal(queuedDelete.length, 2);
+  const confirmCb = JSON.parse(queuedDelete[1].body).reply_markup.inline_keyboard.flat().find(b => b.text === 'Удалить данные').callback_data;
+  let goodbyeText;
+  await webhook(request(idDelete, { callback: confirmCb }), env(), t0 + 1_000, async (_, method, body) => {
+    if (method === 'answerCallbackQuery') throw new TelegramError(400);
+    goodbyeText = body.text;
+  });
+  assert.match(goodbyeText, /удалены/);
+  assert.equal(await get('SELECT id FROM users WHERE id=?', idDelete), null);
+  assert.equal((await statement('SELECT * FROM delivery_outbox WHERE user_id=?', idDelete).all()).results.length, 0);
+});
+
+test('v2.4.4 совместима с восстановлением delivery_jobs из v2.4.3 при наличии delivery_outbox', async () => {
+  const idRestore = 185, idOutbox = 186;
+  await onboard(session(idRestore), { notifications: true });
+  await statement('DELETE FROM delivery_jobs WHERE user_id=?', idRestore).run();
+  await onboard(session(idOutbox));
+
+  const t0 = now + 50_000;
+  await webhook(request(idOutbox, '/privacy', { updateId: seq++ }), env(), t0, async () => { throw new TelegramError(502); });
+  let sentCount = 0;
+  await tick({ ...env(), ALLOWED_CHAT_IDS: `${idRestore},${idOutbox}` }, t0 + 60_000, async (_, method, body) => {
+    if (method === 'sendMessage' && body.chat_id === idOutbox) sentCount++;
+  });
+  assert.equal(sentCount, 1);
+  assert.equal((await statement('SELECT * FROM delivery_outbox WHERE user_id=?', idOutbox).all()).results.length, 0);
+  assert.ok(await get('SELECT next_due_at FROM delivery_jobs WHERE user_id=?', idRestore));
+});
+
+test('v2.4.4 навигация n:emergency и n:care.help с возвратом через n:resume на check, background и paused', async () => {
+  const idNew = 187, idEpisode = 188;
+  const sNew = session(idNew);
+  await sNew.receive('/start');
+  await sNew.press('☀️ Начать');
+  assert.equal((await load(db, idNew)).fsm.step, 'check');
+
+  await sNew.nav('emergency');
+  assert.equal(sNew.findButton('Назад'), 'n:resume');
+  await sNew.press('Назад');
+  assert.equal((await load(db, idNew)).fsm.step, 'check');
+
+  await sNew.nav('care.help');
+  assert.equal(sNew.messages()[0].reply_markup.inline_keyboard[0][0].callback_data, 'n:emergency');
+  assert.equal(sNew.findButton('Назад'), 'n:resume');
+  await sNew.press('Назад');
+  assert.equal((await load(db, idNew)).fsm.step, 'check');
+
+  await sNew.press('Симптомов сейчас нет');
+  assert.equal((await load(db, idNew)).fsm.step, 'background');
+  await sNew.nav('emergency');
+  await sNew.press('Назад');
+  assert.equal((await load(db, idNew)).fsm.step, 'background');
+  await sNew.nav('care.help');
+  await sNew.press('Назад');
+  assert.equal((await load(db, idNew)).fsm.step, 'background');
+
+  await sNew.press('Да');
+  assert.equal((await load(db, idNew)).fsm.step, 'paused');
+  assert.equal((await load(db, idNew)).neutral, true);
+  await sNew.nav('emergency');
+  assert.equal(sNew.findButton('Назад'), 'n:resume');
+  await sNew.press('Назад');
+  assert.equal((await load(db, idNew)).fsm.step, 'paused');
+  await sNew.nav('care.help');
+  assert.equal(sNew.findButton('Назад'), 'n:resume');
+  await sNew.press('Назад');
+  assert.equal((await load(db, idNew)).fsm.step, 'paused');
+  await sNew.press('Записать дату');
+  await sNew.press('Другой город');
+  await sNew.receive('UTC');
+  await sNew.press('Подтвердить');
+  await sNew.press('Указать дату и время');
+  await sNew.receive('01.03.2026');
+  await sNew.receive('07:00');
+  assert.equal((await load(db, idNew)).profile.medicalHold, true);
+
+  // Запись завершённого эпизода: сохранение дат и медицинского флага после возврата из помощи
+  const sEp = session(idEpisode);
+  await onboard(sEp);
+  await sEp.nav('episode');
+  await sEp.press('Употребление завершилось');
+  await sEp.press('Указать дату и время');
+  await sEp.receive('02.03.2026');
+  await sEp.receive('12:00');
+  await sEp.press('Одиночный эпизод');
+  const beforeBack = await load(db, idEpisode);
+  assert.equal(beforeBack.fsm.step, 'check');
+  const savedStart = beforeBack.fsm.start;
+
+  await sEp.nav('care.help');
+  await sEp.press('Назад');
+  await sEp.press('Симптомов сейчас нет');
+  await sEp.nav('emergency');
+  await sEp.press('Назад');
+  await sEp.press('Да');
+  await sEp.nav('care.help');
+  await sEp.press('Назад');
+  await sEp.press('Продолжить запись эпизода');
+  await sEp.press('Подтвердить');
+  const afterEp = await load(db, idEpisode);
+  assert.equal(afterEp.profile.medicalHold, true);
+  assert.equal(afterEp.episodes.length, 1);
+  assert.equal(afterEp.episodes[0].last, savedStart);
+});
+
+test('v2.4.4 календарный бюджет сохраняет выбранные дни недели при изменении суммы «За привычный день»', async () => {
+  const id = 189, s = session(id);
+  await onboard(s);
+  await s.nav('edit.mode');
+  await s.press('Календарный');
+  await s.press('💰 Только деньги');
+  await s.press('За привычный день');
+  await s.receive('1 500');
+  await s.press(/Сб/);
+  await s.press(/Вс/);
+  assert.deepEqual((await load(db, id)).fsm.draft.days, [6, 7]);
+
+  await s.press('Назад');
+  await s.press('Назад');
+  await s.press('За привычный день');
+  await s.receive('2 100');
+  const draftAfter = (await load(db, id)).fsm.draft;
+  assert.deepEqual(draftAfter.days, [6, 7]);
+  assert.match(s.messages()[0].reply_markup.inline_keyboard.flat().map(b => b.text).join(' '), /✓ Сб.*✓ Вс/);
+  await s.press('Готово');
+  await s.press(/✏️ 1\./);
+  await s.press('За привычный день');
+  await s.receive('2 500');
+  assert.deepEqual((await load(db, id)).fsm.draft.days, [6, 7]);
+  await s.press('Готово');
+  await s.press('✅ Сохранить');
+  const state = await load(db, id);
+  assert.deepEqual(state.habits.at(-1).items.map(row => [row.weekday, row.price]), [[6, 250000], [7, 250000]]);
 });

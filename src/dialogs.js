@@ -412,12 +412,13 @@ function formText(state, id, now, value) {
 function routeTo(state, id, now, route) {
   const p = state.profile;
   const [page, arg, other] = route.split('.');
-  if (state.fsm.step && !['help', 'physical', 'emergency', 'care'].includes(page)) finish(state);
+  if (state.fsm.step && !['help', 'physical', 'emergency', 'care', 'resume'].includes(page)) finish(state);
   const start = (step, data) => {
     enter(state, step, data);
     return prompt(state, now);
   };
   switch (page) {
+    case 'resume': return state.fsm.step ? prompt(state, now) : view('menu', state, now, id);
     case 'cancel': return ['habits', 'habitSettings'].includes(arg)
       ? routeTo(state, id, now, arg) : view(['history', 'settings'].includes(arg) ? arg : 'menu', state, now, id);
     case 'start':
