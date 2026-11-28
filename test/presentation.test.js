@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ideas, cravings, lifeLabels } from '../content/ideas.js';
-import { facts, healthRotation, recoveryFacts, sources } from '../content/facts.js';
+import { ideas, cravings, lifeLabels, supportiveIdeas } from '../content/ideas.js';
+import { facts, healthRotation, recoveryFacts, recoveryPeriods, recoveryStages, safeHealthRotation, sources } from '../content/facts.js';
 import { awardCatalog } from '../content/achievements.js';
 import { DAY } from '../src/time.js';
 import { renderHtml } from '../src/telegram.js';
@@ -65,9 +65,11 @@ test('Текст и клавиатуры отделяют медицинскую
   assert.ok(craving.text.indexOf('физически плохо') < craving.text.indexOf('отложить решение'));
   assert.deepEqual(craving.buttons.slice(2, 4).map(row => row[0].callback_data), ['n:physical', 'n:emergency']);
   const progress = view('progress', state, now, 1);
-  assert.match(progress.text, /Участок: 7 дней → 14 дней/);
+  assert.match(progress.text, /Следующий рубеж — \*\*14 дней\*\*\nУчасток: 7 дней → 14 дней/);
   assert.match(progress.text, /дней: \*\*\d+\*\*\n☀️/);
   assert.equal(progress.buttons[0].length, 1);
+  const firstDay = view('progress', { ...state, intervals: [{ start: now - 3_600_000, end: null, precision: 'minute' }] }, now, 1);
+  assert.match(firstDay.text, /Следующий рубеж — \*\*24 часа\*\*\nУчасток: старт → 24 часа/);
 });
 
 test('Нулевое календарное начисление и неизвестная привычка отображаются по-разному', () => {
@@ -104,7 +106,7 @@ test('Ротация проходит доступный набор до пов�
     const rendered = report(sample, ms, 1, day).text;
     assert.equal(report(sample, ms, 1, day).text, rendered);
     assert.doesNotMatch(report(sample, ms, 1, day, { automatic: true }).text, /Предварительный материал/);
-    const [, fact, idea] = /Факт о здоровье\*\*\n([^\n]+)[\s\S]*Идея дня\*\*\n([^\n]+)/.exec(rendered);
+    const [, fact, idea] = /Факт о здоровье\*\*\n([^\n]+)[\s\S]*Мысль дня\*\*\n([^\n]+)/.exec(rendered);
     assert.doesNotMatch(rendered, /Предварительный материал|https?:\/\//);
     return [fact, idea];
   });
@@ -138,9 +140,17 @@ const seriesState = days => ({
   ...state, intervals: [{ start: now - days * DAY, end: null, precision: 'minute' }]
 });
 
-test('Восстановление подбирает период серии, не дублирует шкалу и избегает сухого канцелярита', () => {
+test('Восстановление подбирает период серии, не дублирует шкалу и соблюдает единый редакционный стандарт', () => {
+  const bannedHedging = /\b(?:может|могут|возможно|обычно|у некоторых людей|у участников исследования|в среднем)\b/iu;
+  for (const fact of healthRotation) {
+    assert.doesNotMatch(fact.text + ' ' + fact.study + ' ' + fact.population, bannedHedging, fact.id);
+    assert.notEqual(fact.id, 'sleep');
+  }
+  for (const fact of recoveryFacts) assert.doesNotMatch(fact.text, bannedHedging, fact.id);
+  for (const stage of recoveryStages) assert.doesNotMatch(stage.title + ' ' + stage.summary, bannedHedging, stage.id);
+  for (const [, period, , horizon] of recoveryPeriods) assert.doesNotMatch(period + ' ' + (horizon?.text ?? ''), bannedHedging);
   for (const [days, period] of [[0.5, 'Первые дни'], [1, 'Первые дни'], [3, 'Первые дни'], [7, 'Первые недели'],
-    [14, 'Первые недели'], [23, 'Первые недели'], [30, 'Первый месяц'], [90, 'Несколько месяцев'],
+    [14, 'Первые недели'], [23, 'Первые недели'], [30, '1–3 месяца'], [55, '1–3 месяца'], [90, 'Несколько месяцев'],
     [180, 'Полгода и дальше'], [365, 'Год и дольше'], [1000, 'Год и дольше'], [1825, 'Год и дольше']]) {
     const sample = seriesState(days);
     const before = statsFor(sample, now);
@@ -155,13 +165,13 @@ test('Восстановление подбирает период серии, �
     assert.equal(recovery.buttons.flat().find(b => b.text === 'Главное меню').callback_data, 'n:menu');
   }
   assert.match(view('recovery', seriesState(23), now, 1).text, /Идёт четвёртая неделя[\s\S]+Ближайший ориентир — 1 месяц[\s\S]+\*\*7 дней\*\*/);
-  assert.match(view('recovery', seriesState(30), now, 1).text, /Текущий период · Первый месяц[\s\S]+\*\*Печень\*\*/);
+  assert.match(view('recovery', seriesState(30), now, 1).text, /Текущий период · 1–3 месяца[\s\S]+\*\*Печень\*\*/);
 });
 
 test('Содержательная шкала восстановления листается, открывает детали и источники этапов', () => {
   const sample = seriesState(23);
   const first = view('stages', sample, now, 1);
-  assert.match(first.text, /✅ \*\*Первые дни \(0–7 дней\)\*\*[\s\S]+📍 \*\*Первые недели \(1–4 недели\)\*\*[\s\S]+⏳ \*\*Первый месяц \(30 дней\)\*\*/);
+  assert.match(first.text, /✅ \*\*Первые дни \(0–7 дней\)\*\*[\s\S]+📍 \*\*Первые недели \(1–4 недели\)\*\*[\s\S]+⏳ \*\*1–3 месяца \(30–90 дней\)\*\*/);
   assert.match(first.text, /Страница 1 из 2/);
   assert.match(view('stages', seriesState(1), now, 1).text, /📍 \*\*Первые дни \(0–7 дней\)\*\*/);
   const turn = (screen, label) => view(screen.buttons.flat().find(button => button.text === label).callback_data.slice(2), sample, now, 1);
@@ -169,8 +179,8 @@ test('Содержательная шкала восстановления ли�
   assert.match(second.text, /⏳ \*\*Несколько месяцев \(3–6 мес\.\)\*\*[\s\S]+⏳ \*\*Год и долгосрочно \(12\+ мес\.\)\*\*/);
   assert.match(second.text, /Страница 2 из 2/);
   assert.deepEqual(turn(second, '← Назад'), first);
-  const detail = turn(first, '📖 Первый месяц');
-  assert.match(detail.text, /Первый месяц \(30 дней\)[\s\S]+Ориентир впереди[\s\S]+Печень[\s\S]+Давление/);
+  const detail = turn(first, '📖 1–3 месяца');
+  assert.match(detail.text, /1–3 месяца \(30–90 дней\)[\s\S]+Ориентир впереди[\s\S]+Печень[\s\S]+Давление/);
   const ev = turn(detail, '🔬 Печень');
   assert.match(ev.text, /Mehta|АЛТ и ГГТ/);
   assert.deepEqual(turn(ev, 'Назад'), detail);
@@ -178,7 +188,7 @@ test('Содержательная шкала восстановления ли�
   const detail2 = turn(second, '📖 Полгода');
   assert.deepEqual(turn(detail2, '← К этапам'), second);
   assert.match(turn(second, 'Главное меню').text, /Мой прогресс/);
-  assert.match(view('stages.0', seriesState(30), now, 1).text, /📍 \*\*Первый месяц/);
+  assert.match(view('stages.0', seriesState(30), now, 1).text, /📍 \*\*1–3 месяца/);
   assert.match(view('stages.1', seriesState(365), now, 1).text, /✅ \*\*Полгода и далее[\s\S]+📍 \*\*Год и долгосрочно/);
 });
 
@@ -196,15 +206,23 @@ test('Восстановление сохраняет приоритет пом�
     assert.ok(paused.buttons.flat().some(button => button.callback_data === route));
   }
   const manual = view('morning', open, now, 1);
-  assert.match(manual.text, /Серия на паузе[\s\S]+Факт о здоровье[\s\S]+Идея дня[\s\S]+При симптомах отмены/);
+  assert.match(manual.text, /Серия на паузе[\s\S]+Факт о здоровье[\s\S]+Мысль дня[\s\S]+При симптомах отмены/);
   assert.doesNotMatch(manual.text, /Следующий рубеж|Резкое прекращение/);
   assert.equal(view('morning.preview', { ...open, profile: { ...open.profile, privatePush: true } }, now, 1).text,
     'Автоматическая отправка на паузе.');
   assert.match(view('stages', open, now, 1).text, /• \*\*Первые дни/);
-  const medical = { ...seriesState(365), profile: { ...state.profile, medicalHold: true } };
+  const medical = { ...seriesState(365), profile: { ...state.profile, medicalHold: true }, neutral: true };
   assert.match(view('recovery', medical, now, 1).text, /365 дней без алкоголя[\s\S]+Год и дольше[\s\S]+При симптомах отмены/);
   assert.ok(view('recovery', medical, now, 1).buttons.flat().some(button => button.callback_data === 'n:emergency'));
-  assert.match(view('morning', medical, now, 1).text, /При симптомах отмены/);
+  const medicalMorning = view('morning', medical, now, 1);
+  assert.match(medicalMorning.text, /^☀️ \*\*Доброе утро!\*\*[\s\S]+365 дней без алкоголя[\s\S]+Следующий рубеж[\s\S]+Факт о здоровье[\s\S]+Мысль дня/);
+  assert.doesNotMatch(medicalMorning.text, /При симптомах отмены/);
+  assert.deepEqual(medicalMorning.buttons.map(row => row.map(b => b.text)), [
+    ['🫀 Восстановление', '📊 Мой прогресс'], ['🔬 Подробнее и источники'], ['ℹ️ Как считаем']
+  ]);
+  const [, medFact, medThought] = /Факт о здоровье\*\*\n([^\n]+)[\s\S]*Мысль дня\*\*\n([^\n]+)/.exec(medicalMorning.text);
+  assert.ok(safeHealthRotation.some(f => f.text === medFact));
+  assert.ok(supportiveIdeas.some(i => i.text === medThought));
   assert.match(view('recovery', { ...state, intervals: [{ start: now + 1000, end: null }] }, now, 1).text, /ещё не начался/);
   assert.match(view('recovery', { ...state, profile: null, intervals: [] }, now, 1).text, /Начни отслеживание/);
 });
@@ -229,8 +247,13 @@ test('Факт дня и его источник сохраняются при �
   const later = report(sample, now + 2 * 3_600_000, 1, day);
   assert.equal(fact(first.text), fact(later.text));
   assert.deepEqual(first.buttons.at(-1), later.buttons.at(-1));
-  assert.equal(first.buttons.at(-1)[0].text, '🔬 Подробнее и источники');
-  const destination = first.buttons.at(-1)[0].callback_data.slice(2);
+  assert.equal(first.buttons[1][0].text, '🔬 Подробнее и источники');
+  assert.equal(first.buttons[2][0].text, 'ℹ️ Как считаем');
+  assert.equal(first.buttons[2][0].callback_data, 'n:method.morning');
+  const methodFromMorning = view('method.morning', sample, now, 1);
+  assert.match(methodFromMorning.text, /Как считаем/);
+  assert.ok(methodFromMorning.buttons.flat().some(b => b.callback_data === 'n:morning'));
+  const destination = first.buttons[1][0].callback_data.slice(2);
   assert.ok(view(destination, sample, now, 1).text.includes(fact(first.text)));
 });
 

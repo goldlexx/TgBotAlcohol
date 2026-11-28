@@ -247,6 +247,13 @@ const categories = Object.entries(groups).map(([category, entries]) => [...entri
 })));
 export const ideas = Array.from({ length: Math.max(...categories.map(group => group.length)) }, (_, i) =>
   categories.flatMap(group => group[i] ? [group[i]] : [])).flat();
+const supportiveIds = new Set([
+  'growth-1', 'growth-4', 'growth-5', 'growth-11', 'growth-15',
+  'family-15', 'family-23', 'family-24',
+  'work-3', 'work-5', 'work-12', 'work-16', 'work-20',
+  'evening-4', 'evening-9'
+]);
+export const supportiveIdeas = ideas.filter(row => supportiveIds.has(row.id));
 
 export const cravings = {
   work: [

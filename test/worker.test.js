@@ -234,19 +234,21 @@ test('Медицинские экраны сохраняют профиль и �
   assert.match(await s.nav('awards'), /3 из 12/);
   assert.match(await s.nav('craving'), /Что сейчас происходит[\s\S]+При симптомах отмены/);
   const manual = await s.receive('/morning');
-  assert.match(manual, /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
-  assert.match(manual, /При симптомах отмены/);
-  assert.doesNotMatch(manual, /Резкое прекращение/);
+  assert.match(manual, /^☀️ <b>Доброе утро!<\/b>[\s\S]*Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Мысль дня/);
+  assert.doesNotMatch(manual, /При симптомах отмены|Мне плохо|Экстренная помощь|Резкое прекращение/);
   const after = await load(db, id);
   assert.deepEqual(after.profile, before.profile);
   assert.deepEqual(after.intervals, before.intervals);
   assert.equal(after.neutral, true);
   assert.deepEqual(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), job);
   const sent = [];
-  await tick({ ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id) }, now, async (_, __, body) => sent.push(body.text));
+  await tick({ ...env(), CLOSED_TEST: '1', ALLOWED_CHAT_IDS: String(id) }, now, async (_, __, body) => sent.push(body));
   assert.equal(sent.length, 1);
-  assert.match(sent[0], /Твой отчёт/);
-  assert.doesNotMatch(sent[0], /Факт о здоровье|Идея дня/);
+  assert.match(sent[0].text, /^☀️ <b>Доброе утро!<\/b>[\s\S]*Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Мысль дня/);
+  assert.doesNotMatch(sent[0].text, /Твой отчёт|При симптомах отмены|Мне плохо|Экстренная помощь/);
+  assert.deepEqual(sent[0].reply_markup.inline_keyboard.map(r => r.map(b => b.text)), [
+    ['🫀 Восстановление', '📊 Мой прогресс'], ['🔬 Подробнее и источники'], ['ℹ️ Как считаем']
+  ]);
   assert.ok(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id));
   const stored = JSON.parse((await get('SELECT profile FROM users WHERE id=?', id)).profile);
   assert.equal(stored.trackingPaused, undefined);
@@ -303,7 +305,7 @@ test('Конкурентный дубль webhook приводит к одном
 
 test('Короткая регистрация: ошибка пояса и даты, приблизительная дата, уведомления выключены', async () => {
   const s = session(108);
-  assert.match(await s.receive('/start'), /<b>Счастье без алкоголя<\/b>/);
+  assert.match(await s.receive('/start'), /<b>НЕ ПЬЮ \| Счастье без алкоголя<\/b>/);
   await s.press('☀️ Начать');
   await s.press('Симптомов сейчас нет');
   assert.match(await s.press('Нет'), /Москва|часовой пояс/);
@@ -438,11 +440,11 @@ test('/morning использует общий генератор и не мен
     await s.press(setting);
     const text = await s.receive('/morning');
     assert.equal(text.includes('Факт о здоровье'), hasFact);
-    assert.equal(text.includes('Идея дня'), hasIdea);
+    assert.equal(text.includes('Мысль дня'), hasIdea);
   }
   await s.nav('edit.push');
   await s.press('Нейтральное сообщение');
-  assert.match(await s.receive('/morning'), /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
+  assert.match(await s.receive('/morning'), /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Мысль дня/);
   assert.equal(await s.nav('morning.preview'), 'Твой отчёт готов');
   await s.nav('notifications');
   await s.press('Отключить уведомления');
@@ -510,13 +512,14 @@ test('Приватное превью обратимо и не снимает м
   await seed([id], { frequency: 'off', privatePush: true, medicalHold: true });
   const state = await load(db, id);
   const explicit = await s.receive('/morning');
-  assert.match(explicit, /Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
+  assert.match(explicit, /^☀️ <b>Доброе утро!<\/b>[\s\S]*Следующий рубеж[\s\S]*Факт о здоровье[\s\S]*Мысль дня/);
+  assert.doesNotMatch(explicit, /При симптомах отмены/);
   assert.equal(await s.nav('morning.preview'), 'Твой отчёт готов');
   const push = report(state, now, id, today(now, 'UTC'), { automatic: true });
   assert.equal(push.text, 'Твой отчёт готов');
   await s.nav('edit.push');
   await s.press('Обычный отчёт');
-  assert.match(await s.nav('morning.preview'), /Твой отчёт/);
+  assert.match(await s.nav('morning.preview'), /^☀️ <b>Доброе утро!<\/b>[\s\S]*Факт о здоровье[\s\S]*Мысль дня/);
   assert.match(await s.nav('craving'), /Что сейчас происходит[\s\S]+При симптомах отмены/);
   assert.deepEqual((await load(db, id)).profile, { ...state.profile, privatePush: false });
   assert.equal(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), null);
@@ -732,7 +735,7 @@ test('Ручное поздравление и первый рубеж посл�
   ]);
   const s = session(id);
   const startJob = await get('SELECT * FROM delivery_jobs WHERE user_id=?', id);
-  assert.match(await s.receive('/morning'), /Первые сутки позади[\s\S]*Факт о здоровье[\s\S]*Идея дня/);
+  assert.match(await s.receive('/morning'), /Первые сутки позади[\s\S]*Факт о здоровье[\s\S]*Мысль дня/);
   assert.deepEqual(await get('SELECT * FROM delivery_jobs WHERE user_id=?', id), startJob);
   assert.equal(await get('SELECT * FROM delivery_receipts WHERE user_id=?', id), null);
   const sent = [], api = async (_, __, body) => sent.push(body);
@@ -1094,7 +1097,9 @@ for (const [id, flag] of [[172, 'medicalHold'], [173, 'neutral'], [174, 'trackin
     assert.ok(job);
     assert.match(await s.nav('notifications'), /Следующий отчёт/);
     assert.match(await s.nav('recovery'), /Текущий период[\s\S]+При симптомах отмены/);
-    assert.match(await s.receive('/morning'), /Следующий рубеж[\s\S]*Идея дня[\s\S]*При симптомах отмены/);
+    assert.match(await s.receive('/morning'), /^☀️ <b>Доброе утро!<\/b>[\s\S]*Следующий рубеж[\s\S]*Мысль дня/);
+    assert.doesNotMatch(s.messages()[0].text, /При симптомах отмены/);
+    await s.nav('recovery');
     assert.match(await s.press('⚕️ Мне плохо'), /Немедленно вызови скорую/);
     assert.match(await s.press('Главное меню'), /Мой прогресс/);
     assert.deepEqual((await load(db, id)).profile, profile);
@@ -1120,11 +1125,11 @@ test('Оба сохранённых флага: 23 дня 20 часов, пол�
   s.findButton('🔬 Подробнее и источники');
   s.findButton('🚑 Экстренная помощь');
   const manual = await s.receive('/morning');
-  assert.match(manual, /^☀️ <b>Доброе утро!<\/b>[\s\S]+23 дня 20 часов[\s\S]+61%[\s\S]+Сэкономлено[\s\S]+Не выпито[\s\S]+Факт о здоровье[\s\S]+Идея дня/);
-  for (const text of [recovery, manual]) {
-    assert.match(text, /При симптомах отмены/);
-    assert.doesNotMatch(text, /Резкое прекращение|судорогах|112 или 103/);
-  }
+  assert.match(manual, /^☀️ <b>Доброе утро!<\/b>[\s\S]+23 дня 20 часов[\s\S]+61%[\s\S]+Сэкономлено[\s\S]+Не выпито[\s\S]+Факт о здоровье[\s\S]+Мысль дня/);
+  assert.doesNotMatch(manual, /При симптомах отмены|Мне плохо|Экстренная помощь|Резкое прекращение|судорогах|112 или 103/);
+  assert.match(recovery, /При симптомах отмены/);
+  assert.doesNotMatch(recovery, /Резкое прекращение|судорогах|112 или 103/);
+  await s.nav('recovery');
   await s.press('🚑 Экстренная помощь');
   assert.match(s.messages()[0].text, /Немедленно вызови скорую/);
   assert.match(await s.press('Главное меню'), /Мой прогресс/);
@@ -1304,8 +1309,8 @@ test('06:00 МСК: сохранённый риск не мешает Cron от�
   });
   assert.equal(sent.length, 1);
   assert.equal(sent[0].chat_id, id);
-  assert.match(sent[0].text, /Твой отчёт[\s\S]+Всего трезвых дней/);
-  assert.doesNotMatch(sent[0].text, /Факт о здоровье|Идея дня|поздрав/i);
+  assert.match(sent[0].text, /^☀️ <b>Доброе утро!<\/b>[\s\S]+Всего трезвых дней[\s\S]+Факт о здоровье[\s\S]+Мысль дня/);
+  assert.doesNotMatch(sent[0].text, /Твой отчёт|При симптомах отмены|Мне плохо|Экстренная помощь|поздрав/i);
   assert.equal((await get('SELECT status FROM delivery_receipts WHERE user_id=? AND local_day=?', id, '2026-03-11')).status, 'sent');
   assert.equal((await load(db, id)).job.slot, next + DAY);
   await tick({ ...closed, TELEGRAM_TOKEN: '' }, next, async () => assert.fail('Unexpected send'));
@@ -1338,8 +1343,8 @@ test('Bootstrap восстанавливает 06:00 МСК без отправ�
   await Promise.all([tick(closed, next, api), tick(closed, next, api)]);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].chat_id, id);
-  assert.match(sent[0].text, /Твой отчёт/);
-  assert.doesNotMatch(sent[0].text, /Факт о здоровье|Идея дня/);
+  assert.match(sent[0].text, /^☀️ <b>Доброе утро!<\/b>[\s\S]+Факт о здоровье[\s\S]+Мысль дня/);
+  assert.doesNotMatch(sent[0].text, /Твой отчёт|При симптомах отмены|Мне плохо|Экстренная помощь/);
   assert.equal((await load(db, id)).job.slot, next + DAY);
 });
 
@@ -1658,4 +1663,46 @@ test('v2.4.4 календарный бюджет сохраняет выбран
   await s.press('✅ Сохранить');
   const state = await load(db, id);
   assert.deepEqual(state.habits.at(-1).items.map(row => [row.weekday, row.price]), [[6, 250000], [7, 250000]]);
+});
+
+test('/cancel отменяет активные формы без сохранения, а /start, /morning, /privacy, /help, /delete и /admin работают', async () => {
+  const idGuest = 190, sGuest = session(idGuest);
+  await sGuest.receive('/start');
+  await sGuest.press('☀️ Начать');
+  await sGuest.press('Симптомов сейчас нет');
+  assert.equal((await load(db, idGuest)).fsm.step, 'background');
+  assert.match(await sGuest.receive('/cancel'), /Ввод отменён[\s\S]*НЕ ПЬЮ/);
+  assert.deepEqual((await load(db, idGuest)).fsm, {});
+
+  const id = 191, s = session(id);
+  await onboard(s, { notifications: true, habit: true });
+  const before = await load(db, id);
+
+  await s.nav('edit.goal');
+  assert.match(await s.receive('/cancel'), /Ввод отменён/);
+  assert.equal(s.messages()[0].reply_markup.keyboard.flat().length, 6);
+  assert.deepEqual((await load(db, id)).fsm, {});
+  assert.equal((await load(db, id)).profile.goal, before.profile.goal);
+
+  await s.nav('edit.habit');
+  await s.press('💰 Только деньги');
+  assert.match(await s.receive('/cancel'), /Ввод отменён/);
+  assert.deepEqual((await load(db, id)).habits, before.habits);
+
+  assert.match(await s.receive('/cancel'), /Сейчас нет активного ввода/);
+  assert.match(await s.receive('/help'), /Помощь сейчас/);
+  assert.match(await s.receive('/privacy'), /Мои данные/);
+  const morningOut = await s.receive('/morning');
+  assert.match(morningOut, /^☀️ <b>Доброе утро!<\/b>[\s\S]*Факт о здоровье[\s\S]*Мысль дня/);
+
+  const adminReplies = [];
+  await webhook(request(id, '/admin'), { ...env(), OWNER_CHAT_ID: String(id) }, now + 60_000, async (_, __, body) => adminReplies.push(body.text));
+  assert.match(adminReplies[0], /Статистика бота/);
+
+  await s.receive('/delete');
+  assert.match(await s.receive('/cancel'), /Ввод отменён/);
+  assert.ok((await load(db, id)).profile);
+  await s.receive('/delete');
+  assert.match(await s.press('Удалить данные'), /Данные бота удалены/);
+  assert.equal((await load(db, id)).profile, null);
 });

@@ -1,5 +1,5 @@
-import { recoveryFacts, recoveryPeriods, recoveryStages, sources, healthRotation } from '../content/facts.js';
-import { ideas, cravings, lifeLabels } from '../content/ideas.js';
+import { recoveryFacts, recoveryPeriods, recoveryStages, sources, healthRotation, safeHealthRotation } from '../content/facts.js';
+import { ideas, cravings, lifeLabels, supportiveIdeas } from '../content/ideas.js';
 import { awardCatalog } from '../content/achievements.js';
 import { calculate, MILESTONES } from './calculations.js';
 import { digits, drinkName, formatMoney, hasCalendarBudget, volume } from './habits.js';
@@ -23,7 +23,7 @@ const menuButton = [nav('Главное меню', 'menu')];
 const careButton = (from = 'help') => [nav('Куда обратиться', 'care.' + from)];
 const evidenceLabel = '🔬 Подробнее и источники';
 const symptomNote = '⚕️ **При симптомах отмены** обратись за медицинской помощью.';
-export const welcome = screen('☀️ **Счастье без алкоголя**\n\nВ жизни без алкоголя можно открыть для себя что-то новое.\n\nСледи за прогрессом, замечай положительные изменения и находи новые способы радоваться жизни.\n\nБесплатно. Без рекламы. Без осуждения.',
+export const welcome = screen('☀️ **НЕ ПЬЮ | Счастье без алкоголя**\n\nВ жизни без алкоголя можно открыть для себя что-то новое.\n\nСледи за прогрессом, замечай положительные изменения и находи новые способы радоваться жизни.\n\nБесплатно. Без рекламы. Без осуждения.',
   [nav('☀️ Начать', 'begin'), nav('🆘 Помощь сейчас', 'help')], [nav('🔐 О моих данных', 'privacy')], ...helpButtons.map(b => [b]));
 export const help = screen('🆘 **Помощь сейчас**\n\nЕсли физически плохо или нужна срочная помощь, выбери подходящий маршрут.',
   ...helpButtons.map(b => [b]), [nav('Хочу выпить', 'craving'), nav('🔐 Мои данные', 'privacy')], menuButton);
@@ -75,8 +75,8 @@ const moneyLines = stats => [...stats.money].map(([currency, amount]) => {
 });
 const awardLine = (d, locked = false) => (locked ? '🔒' : awardCatalog[d][0]) + ' ' + label(d) + ' — ' + awardCatalog[d][1];
 const nextText = stats => 'До рубежа — **' + duration(stats.next * DAY - stats.current, true) + '**';
-const milestoneText = stats => '🎯 Следующий рубеж — ' + label(stats.next) + '\n' +
-  (stats.earlier ? 'Участок: ' + label(stats.earlier) + ' → ' + label(stats.next) + '\n' : '') +
+const milestoneText = stats => '🎯 Следующий рубеж — **' + label(stats.next) + '**\n' +
+  'Участок: ' + (stats.earlier ? label(stats.earlier) : 'старт') + ' → ' + label(stats.next) + '\n' +
   bar(stats.percent) + '\n' + nextText(stats);
 
 export const metricOptions = {
@@ -219,30 +219,30 @@ export function report(state, now, id, day, { automatic = false, milestone = nul
   if (!state.profile) return screen('☀️ **Утренний отчёт**\n\nНачни отслеживание, чтобы увидеть свой отчёт.', [nav('☀️ Начать', 'begin')]);
   const p = state.profile;
   const paused = openEpisode(state);
-  const showHelp = hasMedicalRisk(state) || paused;
   if (automatic && paused) return screen('Автоматическая отправка на паузе.');
   if (automatic && p.privatePush) return screen('Твой отчёт готов', [nav('Открыть отчёт', 'morning')]);
   const stats = statsFor(state, now);
-  if (automatic && hasMedicalRisk(state)) {
-    return screen(['📊 **Твой отчёт**', series(stats), metricLines(p, stats, 'morning').join('\n'), symptomNote]
-      .filter(Boolean).join('\n\n'), ...helpButtons.map(button => [button]));
-  }
   if (!automatic && stats.earlier && today(state.intervals.at(-1).start + stats.earlier * DAY, p.zone) === day) milestone = stats.earlier;
-  const greeting = milestone ? '🏆 **' + awardCatalog[milestone][2] + '**'
-    : afterEpisode ? '☀️ **Твой путь продолжается**' : '☀️ **Доброе утро!**';
-  const lines = [greeting, progressText(state, stats, 'morning')];
+  const risk = hasMedicalRisk(state);
+  const statusLine = milestone ? '🏆 **' + awardCatalog[milestone][2] + '**'
+    : afterEpisode ? '☀️ **Твой путь продолжается**' : null;
+  const lines = ['☀️ **Доброе утро!**', ...(statusLine ? [statusLine] : []), progressText(state, stats, 'morning')];
   if (!paused && p.goal && stats.current >= p.goal * DAY &&
       today(state.intervals.at(-1).start + p.goal * DAY, p.zone) === day) {
     lines.push('🎉 **Твоя личная цель достигнута!** ' + label(p.goal) + ' без алкоголя. Счётчик продолжает работать.');
   }
   const content = p.content ?? 'both';
-  const fact = ['fact', 'both'].includes(content) ? pick(healthRotation, day, id) : null;
+  const fact = ['fact', 'both'].includes(content) ? pick(risk ? safeHealthRotation : healthRotation, day, id) : null;
   if (fact) lines.push('🫀 **Факт о здоровье**\n' + fact.text);
-  if (['idea', 'both'].includes(content)) lines.push('💡 **Идея дня**\n' + idea(day, id));
-  if (showHelp) lines.push(symptomNote);
+  if (['idea', 'both'].includes(content)) {
+    const thought = risk ? pick(supportiveIdeas, day, id).text : idea(day, id);
+    lines.push('💡 **Мысль дня**\n' + thought);
+  }
+  if (paused) lines.push(symptomNote);
   return screen(lines.join('\n\n'), ...reportButtons,
-    fact ? [nav(evidenceLabel, 'evidence.' + fact.id + '.health')] : [],
-    ...(showHelp ? helpButtons.map(button => [button]) : []));
+    [nav(evidenceLabel, fact ? 'evidence.' + fact.id + '.health' : 'sources.health')],
+    [nav('ℹ️ Как считаем', 'method.morning')],
+    ...(paused ? helpButtons.map(button => [button]) : []));
 }
 
 function paginate(rows, page, route, size = 5) {
@@ -556,7 +556,7 @@ export function view(route, state, now, id) {
           [nav('🔬 Научные источники', 'sources.' + arg)], back(arg === 'recovery' ? 'recovery' : 'morning'));
       }
       return screen('ℹ️ **Как считаем**\n\n💰 Экономия и 🥤 невыпитые напитки — оценки по прежней привычке.\n⚖️ Чистый этанол — по объёму и крепости напитков.\n🔥 Калории — по энергетической ценности этанола.\n📅 Трезвые дни и выходные — по указанной истории употребления.\n📝 Прежняя привычка учитывается с даты её сохранения; при изменении условий каждый период считается по своей версии.',
-        [nav('📖 Методика расчётов', 'formulas'), nav('🔬 Научные источники', 'sources.method')], back(['progress', 'details', 'settings'].includes(arg) ? arg : 'menu'));
+        [nav('📖 Методика расчётов', 'formulas'), nav('🔬 Научные источники', 'sources.method')], back(['progress', 'details', 'settings', 'morning'].includes(arg) ? arg : 'menu'));
     case 'formulas': return screen('📖 **Методика расчётов**\n\nСутки серии — 24 часа. Трезвый день — целая местная дата внутри известного периода воздержания. Выходные — полностью завершённые суббота и воскресенье внутри одного такого периода. Если известно только число, отсчёт начинается со следующей полуночи.\n\n**Чистый этанол** = порции × мл × крепость / 100 × 0,789 г по каждому напитку. Энергия этанола = граммы × 7. В эту цифру входит только этанол.\n\n**Пример**\n1 400 ₽ и 7 порций за неделю дают ≈200 ₽ и ≈1 порцию за каждые 24 часа. В календарном расчёте день засчитывается, если целиком попадает и в период воздержания, и в одну версию привычки. День смены привычки посреди дня пропускается в этой оценке.\n\nЭкономия берётся из общего бюджета или отдельных цен. Расходы самого эпизода не вычитаются. При неполных сведениях оценка может быть частичной. Рубежи в годах считаются по 365 суток.',
       [nav('🔬 Научные источники', 'sources.method')], back('method'));
     case 'sources': {

@@ -412,6 +412,7 @@ function formText(state, id, now, value) {
 function routeTo(state, id, now, route) {
   const p = state.profile;
   const [page, arg, other] = route.split('.');
+  const hadStep = Boolean(state.fsm.step);
   if (state.fsm.step && !['help', 'physical', 'emergency', 'care', 'resume'].includes(page)) finish(state);
   const start = (step, data) => {
     enter(state, step, data);
@@ -419,10 +420,15 @@ function routeTo(state, id, now, route) {
   };
   switch (page) {
     case 'resume': return state.fsm.step ? prompt(state, now) : view('menu', state, now, id);
-    case 'cancel': return ['habits', 'habitSettings'].includes(arg)
-      ? routeTo(state, id, now, arg) : view(['history', 'settings'].includes(arg) ? arg : 'menu', state, now, id);
+    case 'cancel':
+      if (!arg) {
+        if (!p) return hadStep ? { ...welcome, text: 'Ввод отменён.\n\n' + welcome.text } : welcome;
+        return { ...screen(hadStep ? 'Ввод отменён.' : 'Сейчас нет активного ввода.'), keyboard: true };
+      }
+      return ['habits', 'habitSettings'].includes(arg)
+        ? routeTo(state, id, now, arg) : view(['history', 'settings'].includes(arg) ? arg : 'menu', state, now, id);
     case 'start':
-      return p ? { ...screen('☀️ **Счастье без алкоголя**'), keyboard: true, followup: view('progress', state, now, id) } : welcome;
+      return p ? { ...screen('☀️ **НЕ ПЬЮ | Счастье без алкоголя**'), keyboard: true, followup: view('progress', state, now, id) } : welcome;
     case 'begin': return p ? view('progress', state, now, id) : start('check', { flow: 'new' });
     case 'metric': {
       if (!p || !Object.hasOwn(metricOptions, arg)) return view('metrics', state, now, id);
@@ -488,7 +494,7 @@ function routeTo(state, id, now, route) {
 }
 
 export function dialog(state, { id, text, callback, updateId }, now) {
-  const command = text?.match(/^\/(start|help|privacy|delete|morning)(?:@[A-Za-z0-9_]+)?(?:\s|$)/)?.[1];
+  const command = text?.match(/^\/(start|help|privacy|delete|morning|cancel)(?:@[A-Za-z0-9_]+)?(?:\s|$)/)?.[1];
   if (command || keys.has(text)) return routeTo(state, id, now, command ?? keys.get(text));
   if (callback?.startsWith('n:')) return routeTo(state, id, now, callback.slice(2));
   if (callback && (!state.fsm.token || !callback.startsWith(state.fsm.token + ':'))) {
